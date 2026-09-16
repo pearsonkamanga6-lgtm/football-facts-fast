@@ -4,7 +4,7 @@ This version is designed specifically to prevent stale-player mistakes such as d
 
 ## New in v2
 
-Before AI analysis is allowed to begin, the server:
+Before AI analysis is allowed to begin, the server: 
 
 1. Resolves both club names against API-Football.
 2. Loads each club's CURRENT registered squad (`/players/squads`).
