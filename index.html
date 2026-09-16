@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#071923">
-<title>Football Fact-First Research v3.7</title>
+<title>Football Fact-First Research v3.8</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon-192.png">
 <style>
@@ -49,7 +49,7 @@
 </head>
 <body>
 <div class="app">
-<div class="top"><div class="brand"><h1>⚽ Football Fact-First Research <span class="pill VERIFIED">v3.7</span></h1><small>Async research jobs • no long-request timeout • live Round 2+ progress • resilient JSON handling</small></div><div class="badge" id="healthBadge">Checking engine…</div></div>
+<div class="top"><div class="brand"><h1>⚽ Football Fact-First Research <span class="pill VERIFIED">v3.8</span></h1><small>Version handshake • async research jobs • live Round 2+ progress • no mixed-version empty reports</small></div><div class="badge" id="healthBadge">Checking engine…</div></div>
 <div class="tabs"><button class="tab active" data-tab="session">Research Session</button><button class="tab" data-tab="postboard">POSTBOARD</button><button class="tab" data-tab="history">History</button><button class="tab" data-tab="settings">Setup</button></div>
 
 <section id="tab-session">
@@ -116,7 +116,7 @@ Leave blank for pure market discovery."></textarea></div>
 
 <section id="tab-settings" class="hidden">
 <div class="panel">
-<h2>Research engine setup <span class="pill VERIFIED">v3.7</span></h2><p class="tiny muted">v3.7 runs research asynchronously and keeps the live stage-by-stage tracker for every research round, including Round 2 and later. If you still see an older version after deploy, close the tab and reopen the Render URL.</p>
+<h2>Research engine setup <span class="pill VERIFIED">v3.8</span></h2><p class="tiny muted">v3.8 verifies browser/server version compatibility and keeps the live stage-by-stage tracker for every research round, including Round 2 and later. If you still see an older version after deploy, close the tab and reopen the Render URL.</p>
 <p>Add these Environment Variables in Render. Keep all keys on the server, never in the browser:</p>
 <ul>
 <li><code>API_FOOTBALL_KEY</code> — structured football facts, predictions and bookmaker odds.</li>
@@ -144,6 +144,7 @@ Leave blank for pure market discovery."></textarea></div>
 </div>
 
 <script>
+const APP_VERSION="3.8.0";
 const KEY="footballFactFirstResearch_v2";
 let state=loadState();let activeSession=null;
 function loadState(){try{return JSON.parse(localStorage.getItem(KEY))||{sessions:[]}}catch{return{sessions:[]}}}
@@ -153,11 +154,33 @@ function fmtDate(x){try{return new Date(x).toLocaleString()}catch{return x}}
 function classKey(c){return String(c||"").startsWith("GENUINE")?"GENUINE":String(c||"").startsWith("UNRESOLVED")?"UNRESOLVED":c||""}
 document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>{document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("active",x===b));["session","postboard","history","settings"].forEach(t=>document.getElementById("tab-"+t).classList.toggle("hidden",t!==b.dataset.tab));if(b.dataset.tab==="postboard")renderPostboard();if(b.dataset.tab==="history")renderHistory();if(b.dataset.tab==="settings")checkHealth()});
 
+
+async function checkAppVersion(){
+  const badge=document.getElementById("healthBadge");
+  try{
+    const r=await fetch(`/api/version?t=${Date.now()}`,{cache:"no-store"});
+    const d=await readJsonResponse(r,"Version check");
+    if(d.version!==APP_VERSION){
+      badge.textContent=`Update required`;
+      badge.style.color="var(--danger)";
+      const start=document.getElementById("startBtn");if(start)start.disabled=true;
+      const status=document.getElementById("runStatus");
+      status.classList.remove("hidden");status.className="status bad";
+      status.innerHTML=`<strong>Mixed app versions detected.</strong> Browser: v${esc(APP_VERSION)} • Server: v${esc(d.version||"?")}. Close this tab completely and reopen the Render URL. If it persists, confirm GitHub <code>public/index.html</code> and <code>server.js</code> are both from the same update package.`;
+      return false;
+    }
+    return true;
+  }catch{
+    return true;
+  }
+}
+
 async function checkHealth(){
  const badge=document.getElementById("healthBadge"),box=document.getElementById("configStatus");
+ const versionOk=await checkAppVersion();
  try{
    const r=await fetch("/api/health",{cache:"no-store"}),d=await readJsonResponse(r,"Setup check");
-   const ok=d.tavilyConfigured&&d.geminiConfigured;
+   const ok=versionOk&&d.tavilyConfigured&&d.geminiConfigured;
    badge.textContent=ok?"Verified engine ready":"Setup needed";
    badge.style.color=ok?"var(--good)":"var(--warn)";
    box.className="status "+(ok?"good":"warn");
@@ -290,6 +313,7 @@ function progressHtml(f,latest){
 }
 
 document.getElementById("startBtn").onclick=async()=>{
+ if(!(await checkAppVersion()))return;
  const fixtures=parseLines("fixturesInput"),markets=parseLines("marketsInput");
  if(!fixtures.length){alert("Paste at least one fixture.");return}
  if(!(await checkHealth())){alert("Setup is incomplete. Open Setup and add API_FOOTBALL_KEY, TAVILY_API_KEY and GEMINI_API_KEY in Render.");return}

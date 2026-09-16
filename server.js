@@ -2071,9 +2071,14 @@ Do not add markdown or commentary outside the JSON.`;
   throw firstError||new Error("Primary analysis failed.");
 }
 
+app.get("/api/version",(req,res)=>{
+  res.setHeader("Cache-Control","no-store");
+  res.json({ok:true,version:"3.8.0",protocol:"async-research-v2"});
+});
+
 app.get("/api/health",(req,res)=>{
   res.json({
-    ok:true,version:"3.7.0",
+    ok:true,version:"3.8.0",
     tavilyConfigured:Boolean(process.env.TAVILY_API_KEY),
     geminiConfigured:Boolean(process.env.GEMINI_API_KEY),
     apiFootballConfigured:Boolean(process.env.API_FOOTBALL_KEY),
@@ -2319,26 +2324,15 @@ app.get("/api/research-result/:id",(req,res)=>{
   return res.status(404).json({ok:false,status:"missing",error:"Research job not found or expired."});
 });
 
-// Backward-compatible endpoint: starts an async job instead of holding one long HTTP request open.
+// Legacy endpoint guard: old cached clients expected /api/research to return
+// a finished round synchronously. Returning HTTP 202 made those clients render an empty round.
 app.post("/api/research",(req,res)=>{
-  const progressId=String(req.body?.progressId||"").trim().slice(0,120) || `legacy-${Date.now()}`;
-  if(researchProgress.get(progressId)?.status==="running"){
-    return res.status(409).json({error:"That research job is already running.",progressId});
-  }
-  setResearchProgress(progressId,{percent:1,stage:"Queued",stageNumber:1,totalStages:10,message:"Research job accepted. Use the result endpoint to retrieve it.",status:"running"});
-  researchResults.delete(progressId);
-  const body={...(req.body||{}),progressId};
-  setImmediate(async()=>{
-    try{
-      const result=await executeResearchJob(body,progressId);
-      researchResults.set(progressId,{status:"complete",result,updatedAt:isoNow()});
-      finishResearchProgress(progressId);
-    }catch(err){
-      researchResults.set(progressId,{status:"error",error:err.message||"Research failed.",updatedAt:isoNow()});
-      failResearchProgress(progressId,err);
-    }
+  res.status(409).json({
+    ok:false,
+    code:"CLIENT_UPDATE_REQUIRED",
+    requiredVersion:"3.8.0",
+    error:"Your browser is running an older Football Fact-First interface. Reopen the live Render URL so public/index.html updates to v3.8 before starting research."
   });
-  res.status(202).json({ok:true,progressId,status:"accepted",message:"Research is running asynchronously."});
 });
 
 
@@ -2346,4 +2340,4 @@ app.use((req,res)=>{
   res.setHeader("Cache-Control","no-cache, no-store, must-revalidate");
   res.sendFile(path.join(__dirname,"public","index.html"));
 });
-app.listen(PORT,()=>console.log(`Football Fact-First Research v3.7 running on port ${PORT}`));
+app.listen(PORT,()=>console.log(`Football Fact-First Research v3.8 running on port ${PORT}`));
