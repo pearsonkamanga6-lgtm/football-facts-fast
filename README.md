@@ -1,4 +1,4 @@
-# Football Fact-First Research v3.7 — Async Research Jobs
+# Football Fact-First Research v3.8 — Version Handshake
 
 
 This version is designed specifically to prevent stale-player mistakes such as describing a footballer as being at an old club after a transfer.
@@ -410,3 +410,20 @@ This makes long Round 1 / Round 2 research much less vulnerable to Render/proxy 
 
 The browser also has a safe JSON reader. If any endpoint ever returns an HTML page,
 the user sees a clear infrastructure/provider message instead of a raw JSON parser exception.
+
+
+## v3.8 — mixed-version protection
+
+A partial deployment can leave a newer async server behind an older cached v3.0 browser UI.
+The old UI expects POST /api/research to return a complete round, while the newer server starts
+an asynchronous job. That mismatch can create an empty-looking "successful" round with 0 sources,
+0 evidence and invalid dates.
+
+v3.8 fixes this:
+- GET /api/version exposes the server release/protocol.
+- The browser checks its APP_VERSION against the server before research.
+- If they differ, Start Research is disabled and an Update Required message is shown.
+- The legacy POST /api/research endpoint now returns HTTP 409 CLIENT_UPDATE_REQUIRED instead of
+  returning an async acceptance object that old clients can mistake for completed research.
+
+This prevents mixed-version deployments from silently producing zero-data reports.
