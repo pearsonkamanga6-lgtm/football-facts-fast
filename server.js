@@ -870,18 +870,16 @@ function normalizeCouncilResult(provider,modelName,obj){
   };
 }
 async function geminiCouncilMember(payload){
-  const key=requireEnv("GEMINI_API_KEY");
-  const model=process.env.GEMINI_COUNCIL_MODEL||process.env.GEMINI_MODEL||"gemini-3.8-flash";
-  const response=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,{
-    method:"POST",
-    headers:{"Content-Type":"application/json","x-goog-api-key":key},
-    body:JSON.stringify({contents:[{parts:[{text:councilPrompt(payload)}]}],generationConfig:{temperature:0.25,maxOutputTokens:3500,responseMimeType:"application/json"}})
+  const result=await geminiTextWithRetry({
+    prompt:councilPrompt(payload),
+    maxOutputTokens:3500,
+    responseMimeType:"application/json",
+    preferredModel:process.env.GEMINI_COUNCIL_MODEL||process.env.GEMINI_MODEL||"gemini-3.8-flash"
   });
-  const txt=await response.text();
-  if(!response.ok)throw new Error(`Gemini council failed (${response.status}): ${txt.slice(0,260)}`);
-  const d=JSON.parse(txt);
-  const out=(d.candidates?.[0]?.content?.parts||[]).map(p=>p.text||"").join("");
-  return normalizeCouncilResult("Google","Gemini",parseJsonObject(out,"Gemini"));
+  const out=parseJsonObject(result.output,"Gemini");
+  const normalized=normalizeCouncilResult("Google",`Gemini (${result.model})`,out);
+  normalized.retryAttempt=result.attempt;
+  return normalized;
 }
 async function groqCouncilMember(payload,model,display){
   const key=requireEnv("GROQ_API_KEY");
@@ -1225,31 +1223,64 @@ Ground factual claims only in the structured data or supplied web sources.
 `;
 }
 
-async function geminiAnalyze(payload){
+
+function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
+
+async function geminiTextWithRetry({prompt,maxOutputTokens=9000,responseMimeType="application/json",preferredModel}){
   const key=requireEnv("GEMINI_API_KEY");
-  const model=process.env.GEMINI_MODEL||"gemini-3.8-flash";
-  const response=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,{
-    method:"POST",
-    headers:{"Content-Type":"application/json","x-goog-api-key":key},
-    body:JSON.stringify({
-      contents:[{parts:[{text:analysisPrompt(payload)}]}],
-      generationConfig:{temperature:0.15,maxOutputTokens:9000,responseMimeType:"application/json"}
-    })
-  });
-  const text=await response.text();
-  if(!response.ok) throw new Error(`Gemini analysis failed (${response.status}): ${text.slice(0,320)}`);
-  const data=JSON.parse(text);
-  const output=(data.candidates?.[0]?.content?.parts||[]).map(p=>p.text||"").join("").trim();
-  try{return JSON.parse(output)}catch{
-    const m=output.match(/\{[\s\S]*\}/);
-    if(!m)throw new Error("Gemini returned an unreadable analysis.");
-    return JSON.parse(m[0]);
+  const configured=preferredModel||process.env.GEMINI_MODEL||"gemini-3.8-flash";
+  const fallbackModels=[configured,"gemini-3.7-flash","gemini-3.6-flash","gemini-3.5-flash-lite"]
+    .filter((m,i,a)=>m&&a.indexOf(m)===i);
+  const errors=[];
+  for(const model of fallbackModels){
+    for(let attempt=1;attempt<=3;attempt++){
+      const response=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,{
+        method:"POST",
+        headers:{"Content-Type":"application/json","x-goog-api-key":key},
+        body:JSON.stringify({
+          contents:[{parts:[{text:prompt}]}],
+          generationConfig:{temperature:0.15,maxOutputTokens,responseMimeType}
+        })
+      });
+      const text=await response.text();
+      if(response.ok){
+        const data=JSON.parse(text);
+        const output=(data.candidates?.[0]?.content?.parts||[]).map(p=>p.text||"").join("").trim();
+        return {model,output,attempt};
+      }
+      const retryable=[429,500,502,503,504].includes(response.status);
+      errors.push(`${model} attempt ${attempt}: HTTP ${response.status} ${text.slice(0,300)}`);
+      if(!retryable)break;
+      if(attempt<3){
+        const delay=[2500,6500,13000][attempt-1]+Math.floor(Math.random()*1200);
+        await sleep(delay);
+      }
+    }
   }
+  throw new Error(`Gemini unavailable after automatic retries/fallbacks. ${errors.slice(-4).join(" | ")}`);
+}
+
+async function geminiAnalyze(payload){
+  const result=await geminiTextWithRetry({
+    prompt:analysisPrompt(payload),
+    maxOutputTokens:9000,
+    responseMimeType:"application/json",
+    preferredModel:process.env.GEMINI_MODEL||"gemini-3.8-flash"
+  });
+  let parsed;
+  try{parsed=JSON.parse(result.output)}catch{
+    const m=result.output.match(/\{[\s\S]*\}/);
+    if(!m)throw new Error(`Gemini ${result.model} returned an unreadable analysis.`);
+    parsed=JSON.parse(m[0]);
+  }
+  parsed._geminiModelUsed=result.model;
+  parsed._geminiAttempt=result.attempt;
+  return parsed;
 }
 
 app.get("/api/health",(req,res)=>{
   res.json({
-    ok:true,version:"3.0.0",
+    ok:true,version:"3.1.0",
     tavilyConfigured:Boolean(process.env.TAVILY_API_KEY),
     geminiConfigured:Boolean(process.env.GEMINI_API_KEY),
     apiFootballConfigured:Boolean(process.env.API_FOOTBALL_KEY),
@@ -1381,4 +1412,4 @@ app.post("/api/research",async(req,res)=>{
 });
 
 app.use((req,res)=>res.sendFile(path.join(__dirname,"public","index.html")));
-app.listen(PORT,()=>console.log(`Football Fact-First Research v3.0 running on port ${PORT}`));
+app.listen(PORT,()=>console.log(`Football Fact-First Research v3.1 running on port ${PORT}`));

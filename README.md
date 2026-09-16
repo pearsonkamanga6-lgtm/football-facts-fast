@@ -1,10 +1,11 @@
-# Football Fact-First Research v3.0 — Multi-AI Council + POSTBOARD
+# Football Fact-First Research v3.1 — Gemini 503 Resilience Hotfix
+
 
 This version is designed specifically to prevent stale-player mistakes such as describing a footballer as being at an old club after a transfer.
 
 ## New in v2
 
-Before AI analysis is allowed to begin, the server: 
+Before AI analysis is allowed to begin, the server:
 
 1. Resolves both club names against API-Football.
 2. Loads each club's CURRENT registered squad (`/players/squads`).
@@ -239,3 +240,7 @@ API-Football Predictions, Forebet, PredictZ, WinDrawWin and FootyStats search re
 
 Important: ChatGPT Plus is not used as an API inside this application.
 The OpenAI-family free council member is GPT-OSS 120B through Groq when GROQ_API_KEY is configured.
+
+
+## v3.1 hotfix
+Google documents HTTP 503 UNAVAILABLE as a transient overload condition and recommends exponential backoff. This build retries automatically and then falls back through Gemini 3.7 Flash, Gemini 3.6 Flash and Gemini 3.5 Flash-Lite before giving up.
