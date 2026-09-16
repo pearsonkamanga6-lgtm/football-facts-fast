@@ -1,5 +1,6 @@
 const express = require("express");
 const path = require("path");
+const { jsonrepair } = require("jsonrepair");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -699,12 +700,7 @@ Return ONLY JSON:
   try{
     const interaction=await ai.interactions.create({model,input});
     const out=String(interaction.output_text||interaction.outputText||"").trim();
-    let parsed;
-    try{parsed=JSON.parse(out)}catch{
-      const m=out.match(/\{[\s\S]*\}/);
-      if(!m)throw new Error("Video model returned unreadable output.");
-      parsed=JSON.parse(m[0]);
-    }
+    const parsed=parseJsonObject(out,"Video model");
     return {
       status:"COMPLETE",
       reviewedAt:isoNow(),
@@ -800,12 +796,30 @@ function sourceDigest(sources){
 
 
 function parseJsonObject(text,label="AI"){
-  const raw=String(text||"").trim().replace(/^```(?:json)?\s*/i,"").replace(/\s*```$/,"");
-  try{return JSON.parse(raw)}catch{
-    const m=raw.match(/\{[\s\S]*\}/);
-    if(!m)throw new Error(`${label} returned unreadable JSON.`);
-    return JSON.parse(m[0]);
+  const raw=String(text||"")
+    .trim()
+    .replace(/^```(?:json)?\s*/i,"")
+    .replace(/\s*```$/,"");
+
+  const candidates=[raw];
+  const objectMatch=raw.match(/\{[\s\S]*\}/);
+  if(objectMatch && objectMatch[0]!==raw)candidates.push(objectMatch[0]);
+
+  const errors=[];
+  for(const candidate of candidates){
+    try{return JSON.parse(candidate)}catch(err){errors.push(`direct: ${err.message}`);}
+    try{
+      const repaired=jsonrepair(candidate);
+      return JSON.parse(repaired);
+    }catch(err){
+      errors.push(`repair: ${err.message}`);
+    }
   }
+
+  throw new Error(
+    `${label} returned malformed JSON that could not be repaired automatically. ` +
+    `${errors.slice(-2).join(" | ")}`
+  );
 }
 function clampPct(v){
   const n=Number(v);
@@ -1502,26 +1516,39 @@ async function geminiTextWithRetry({prompt,maxOutputTokens=9000,responseMimeType
 }
 
 async function geminiAnalyze(payload){
-  const result=await geminiTextWithRetry({
-    prompt:analysisPrompt(payload),
-    maxOutputTokens:9000,
-    responseMimeType:"application/json",
-    preferredModel:process.env.GEMINI_MODEL||"gemini-3.8-flash"
-  });
-  let parsed;
-  try{parsed=JSON.parse(result.output)}catch{
-    const m=result.output.match(/\{[\s\S]*\}/);
-    if(!m)throw new Error(`Gemini ${result.model} returned an unreadable analysis.`);
-    parsed=JSON.parse(m[0]);
+  let firstError=null;
+  for(let jsonAttempt=1;jsonAttempt<=2;jsonAttempt++){
+    const suffix=jsonAttempt===1?"":`
+
+IMPORTANT RETRY: Your previous answer was syntactically invalid JSON.
+Return one complete JSON object only. Check every comma, quote, bracket and array before responding.
+Do not add markdown or commentary outside the JSON.`;
+    const result=await geminiTextWithRetry({
+      prompt:analysisPrompt(payload)+suffix,
+      maxOutputTokens:9000,
+      responseMimeType:"application/json",
+      preferredModel:process.env.GEMINI_MODEL||"gemini-3.8-flash"
+    });
+    try{
+      const parsed=parseJsonObject(result.output,`Gemini ${result.model} analysis`);
+      parsed._geminiModelUsed=result.model;
+      parsed._geminiAttempt=result.attempt;
+      parsed._jsonRecoveryAttempt=jsonAttempt;
+      return parsed;
+    }catch(err){
+      firstError=firstError||err;
+      if(jsonAttempt===2){
+        throw new Error(`Primary analysis JSON failed after automatic repair and one clean-JSON retry. ${err.message}`);
+      }
+      await sleep(1200);
+    }
   }
-  parsed._geminiModelUsed=result.model;
-  parsed._geminiAttempt=result.attempt;
-  return parsed;
+  throw firstError||new Error("Primary analysis failed.");
 }
 
 app.get("/api/health",(req,res)=>{
   res.json({
-    ok:true,version:"3.2.0",
+    ok:true,version:"3.3.0",
     tavilyConfigured:Boolean(process.env.TAVILY_API_KEY),
     geminiConfigured:Boolean(process.env.GEMINI_API_KEY),
     apiFootballConfigured:Boolean(process.env.API_FOOTBALL_KEY),
@@ -1653,4 +1680,4 @@ app.post("/api/research",async(req,res)=>{
 });
 
 app.use((req,res)=>res.sendFile(path.join(__dirname,"public","index.html")));
-app.listen(PORT,()=>console.log(`Football Fact-First Research v3.2 running on port ${PORT}`));
+app.listen(PORT,()=>console.log(`Football Fact-First Research v3.3 running on port ${PORT}`));

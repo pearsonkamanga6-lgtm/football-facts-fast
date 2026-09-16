@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#071923">
-<title>Football Fact-First Research v3.2</title>
+<title>Football Fact-First Research v3.3</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon-192.png">
 <style>
@@ -38,7 +38,7 @@
 </head>
 <body>
 <div class="app">
-<div class="top"><div class="brand"><h1>⚽ Football Fact-First Research <span class="pill VERIFIED">v3.2</span></h1><small>Data Collection → Data Analysis → AI Council → Presentation • POSTBOARD</small></div><div class="badge" id="healthBadge">Checking engine…</div></div>
+<div class="top"><div class="brand"><h1>⚽ Football Fact-First Research <span class="pill VERIFIED">v3.3</span></h1><small>Data Collection → Data Analysis → AI Council → Presentation • POSTBOARD</small></div><div class="badge" id="healthBadge">Checking engine…</div></div>
 <div class="tabs"><button class="tab active" data-tab="session">Research Session</button><button class="tab" data-tab="postboard">POSTBOARD</button><button class="tab" data-tab="history">History</button><button class="tab" data-tab="settings">Setup</button></div>
 
 <section id="tab-session">
@@ -208,7 +208,13 @@ async function runSession(session){
    try{const result=await researchFixture(f,1);f.rounds.push(result);f.status="done";delete f.error}catch(e){f.status="error";f.error=e.message}
    saveState();renderSession(session)
  }
- prog.firstElementChild.style.width="100%";status.textContent="Research complete: collected → analyzed → AI Council cross-checked → presented on POSTBOARD." ;btn.disabled=false
+ prog.firstElementChild.style.width="100%";
+  const failed=session.fixtures.filter(x=>x.status==="error").length;
+  status.className="status "+(failed?"warn":"good");
+  status.textContent=failed
+    ? `Research finished with ${failed} fixture error${failed===1?"":"s"}. Successful fixtures remain saved; retry the failed fixture.`
+    : "Research complete: collected → analyzed → AI Council cross-checked → presented on POSTBOARD.";
+  btn.disabled=false
 }
 async function researchFixture(fixtureObj,round){
  const r=await fetch("/api/research",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({fixture:fixtureObj.name,originalMarket:fixtureObj.originalMarket,round,previousRounds:fixtureObj.rounds.map(x=>x.analysis)})});
