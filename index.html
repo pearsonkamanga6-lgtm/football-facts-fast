@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#071923">
-<title>Football Fact-First Research v3.3</title>
+<title>Football Fact-First Research v3.6</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon-192.png">
 <style>
@@ -30,6 +30,17 @@
 .post-row{display:grid;grid-template-columns:minmax(180px,1.5fr) 1fr 1fr 1fr;gap:8px;align-items:center;padding:10px 0;border-top:1px solid var(--line)}
 .post-head{font-size:.75rem;color:var(--muted);text-transform:uppercase}
 .benchmark-card{border:1px solid #344857;background:#091923;border-radius:10px;padding:9px;margin:7px 0}
+.research-live{border:1px solid #2a6375;background:#061923;border-radius:13px;padding:12px;margin:10px 0}
+.research-live-head{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap}
+.research-live-title{font-weight:900;color:var(--accent)}
+.research-live-percent{font-size:1.2rem;font-weight:900;color:var(--gold)}
+.research-live-track{height:14px;border-radius:999px;background:#102c39;overflow:hidden;border:1px solid #285062;margin:9px 0}
+.research-live-fill{height:100%;background:linear-gradient(90deg,var(--blue),var(--accent));transition:width .35s ease}
+.research-log{border-left:3px solid #2e6b7d;padding-left:9px;margin-top:8px}
+.research-log div{font-size:.76rem;color:var(--muted);margin:4px 0}
+.research-pulse{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--accent);margin-right:7px;animation:researchPulse 1.2s infinite}
+@keyframes researchPulse{0%,100%{opacity:.35;transform:scale(.85)}50%{opacity:1;transform:scale(1.2)}}
+
 @media(max-width:720px){.council-grid{grid-template-columns:1fr}.post-row{grid-template-columns:1fr}.post-head{display:none}}
 .legend{display:grid;gap:7px}.legend-row{display:flex;align-items:center;gap:7px}.legend-dot{width:11px;height:11px;border-radius:3px}
 @media(max-width:720px){.pipeline,.score-grid{grid-template-columns:1fr}.bar-row{grid-template-columns:1fr}.bar-track{height:12px}.donut-wrap{justify-content:center}}.right{text-align:right}code{background:#071923;border:1px solid var(--line);padding:2px 5px;border-radius:6px}
@@ -38,7 +49,7 @@
 </head>
 <body>
 <div class="app">
-<div class="top"><div class="brand"><h1>⚽ Football Fact-First Research <span class="pill VERIFIED">v3.3</span></h1><small>Data Collection → Data Analysis → AI Council → Presentation • POSTBOARD</small></div><div class="badge" id="healthBadge">Checking engine…</div></div>
+<div class="top"><div class="brand"><h1>⚽ Football Fact-First Research <span class="pill VERIFIED">v3.6</span></h1><small>Live research tracker • visible Round 2+ progress • pre-match integrity • 50-agent council</small></div><div class="badge" id="healthBadge">Checking engine…</div></div>
 <div class="tabs"><button class="tab active" data-tab="session">Research Session</button><button class="tab" data-tab="postboard">POSTBOARD</button><button class="tab" data-tab="history">History</button><button class="tab" data-tab="settings">Setup</button></div>
 
 <section id="tab-session">
@@ -75,6 +86,15 @@ Inter Milan vs Juventus"></textarea></div>
 <div><label><strong>Optional original markets</strong></label><textarea id="marketsInput" placeholder="One market per line, matching fixture order.
 Leave blank for pure market discovery."></textarea></div>
 </div>
+<div class="grid" style="margin-top:12px">
+<div><label><strong>Initial AI Council size</strong></label>
+<select id="councilSize" style="width:100%;background:#071923;color:var(--text);border:1px solid #285062;border-radius:11px;padding:11px">
+<option value="5">5 agents — light</option><option value="8" selected>8 agents — balanced</option>
+<option value="12">12 agents — deep</option><option value="20">20 agents — heavy free-quota use</option>
+</select></div>
+<div><label><strong>50-brain expansion</strong></label>
+<div class="status warn" style="margin-top:0">After a result, add +5 or +10 agent seats up to 50. The app shows <strong>unique models</strong> separately from <strong>specialist agents</strong>.</div></div>
+</div>
 <div class="notice tiny" style="margin-top:12px"><strong>Facts first, odds last:</strong> current squads, fixture identity, statistics, web sources and video evidence are researched before bookmaker prices are fetched. Every realistic market family is screened. Only after the sporting shortlist exists does the app compare available prices and flag any <strong>potential value</strong> where its estimated fair probability is meaningfully above the market break-even probability.</div>
 <div class="actions"><button class="primary" id="startBtn">Start Verified Research</button><button class="secondary" id="clearBtn">Clear Form</button></div>
 <div id="runStatus" class="status hidden"></div><div class="progress hidden" id="progress"><div></div></div>
@@ -96,7 +116,7 @@ Leave blank for pure market discovery."></textarea></div>
 
 <section id="tab-settings" class="hidden">
 <div class="panel">
-<h2>Research engine setup</h2>
+<h2>Research engine setup <span class="pill VERIFIED">v3.6</span></h2><p class="tiny muted">v3.6 adds a live stage-by-stage tracker for every research round, including Round 2 and later. If you still see an older version after deploy, close the tab and reopen the Render URL.</p>
 <p>Add these Environment Variables in Render. Keep all keys on the server, never in the browser:</p>
 <ul>
 <li><code>API_FOOTBALL_KEY</code> — structured football facts, predictions and bookmaker odds.</li>
@@ -106,9 +126,15 @@ Leave blank for pure market discovery."></textarea></div>
 <li><code>CLOUDFLARE_ACCOUNT_ID</code> + <code>CLOUDFLARE_AUTH_TOKEN</code> — optionally adds <strong>Meta Llama</strong>.</li>
 <li><code>OPENROUTER_API_KEY</code> — optional free-router council fallback.</li>
 <li><code>APP_PUBLIC_URL</code> — your Render URL for OpenRouter app identification.</li>
+<li><code>FOOTBALL_DATA_ORG_KEY</code> — optional free fixture/schedule fallback.</li>
+<li><code>SCOREBAT_TOKEN</code> — optional limited free highlight-feed fallback.</li>
+<li><code>THESPORTSDB_API_KEY</code> — optional; free V1 key defaults to <code>123</code>.</li>
 </ul>
 <div class="status" id="configStatus">Checking configuration…</div>
 <div class="actions"><button class="secondary" id="refreshHealth">Recheck Setup</button><button class="secondary" id="providerTest">Test API-Football Key</button></div>
+<div class="actions"><button class="secondary" id="refreshProviders">Refresh Provider / Quota Board</button></div>
+<div id="providerBoard" class="chartbox"><div class="chart-title">🔌 Provider & Quota Board</div><p class="tiny muted">Shows configured fallbacks and calls made by this Render server instance.</p></div>
+
 <div id="providerStatus" class="status hidden"></div>
 <hr style="border:0;border-top:1px solid var(--line);margin:18px 0">
 <h3>Authenticity workflow</h3>
@@ -131,11 +157,11 @@ async function checkHealth(){
  const badge=document.getElementById("healthBadge"),box=document.getElementById("configStatus");
  try{
    const r=await fetch("/api/health",{cache:"no-store"}),d=await r.json();
-   const ok=d.tavilyConfigured&&d.geminiConfigured&&d.apiFootballConfigured;
+   const ok=d.tavilyConfigured&&d.geminiConfigured;
    badge.textContent=ok?"Verified engine ready":"Setup needed";
    badge.style.color=ok?"var(--good)":"var(--warn)";
    box.className="status "+(ok?"good":"warn");
-   box.innerHTML=`Core: API-Football <strong>${d.apiFootballConfigured?"✓":"missing"}</strong> • Tavily <strong>${d.tavilyConfigured?"✓":"missing"}</strong> • Gemini <strong>${d.geminiConfigured?"✓":"missing"}</strong><br><span class="tiny muted">Council extras: Groq GPT-OSS + Qwen <strong>${d.groqConfigured?"✓":"not connected"}</strong> • Meta Llama <strong>${d.cloudflareConfigured?"✓":"not connected"}</strong> • OpenRouter Free <strong>${d.openRouterConfigured?"✓":"not connected"}</strong></span>`;
+   box.innerHTML=`Core: Tavily <strong>${d.tavilyConfigured?"✓":"missing"}</strong> • Gemini <strong>${d.geminiConfigured?"✓":"missing"}</strong><br><span class="tiny muted">Structured data: API-Football <strong>${d.apiFootballConfigured?"✓":"fallback mode"}</strong> • football-data.org <strong>${d.footballDataOrgConfigured?"✓":"not connected"}</strong> • TheSportsDB <strong>✓ free fallback</strong> • ScoreBat <strong>${d.scoreBatConfigured?"✓":"not connected"}</strong><br>AI Council: Groq <strong>${d.groqConfigured?"✓":"not connected"}</strong> • Cloudflare <strong>${d.cloudflareConfigured?"✓":"not connected"}</strong> • OpenRouter <strong>${d.openRouterConfigured?"✓":"not connected"}</strong></span>`;
    return ok;
  }catch(e){badge.textContent="Server unavailable";box.className="status bad";box.textContent=e.message;return false}
 }
@@ -191,6 +217,63 @@ window.useDiscoveredFixture=(name)=>{fixturesInput.value=name;marketsInput.value
 document.getElementById("clearBtn").onclick=()=>{fixturesInput.value="";marketsInput.value=""};
 function parseLines(id){return document.getElementById(id).value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean)}
 
+
+const researchPollers=new Map();
+
+function createProgressId(round){
+  return `r${round}-${crypto.randomUUID()}`;
+}
+function elapsedText(startedAt){
+  if(!startedAt)return "";
+  const sec=Math.max(0,Math.floor((Date.now()-Date.parse(startedAt))/1000));
+  if(sec<60)return `${sec}s`;
+  const m=Math.floor(sec/60),s=sec%60;
+  return `${m}m ${s}s`;
+}
+function stopProgressPolling(id){
+  const timer=researchPollers.get(id);
+  if(timer)clearInterval(timer);
+  researchPollers.delete(id);
+}
+async function pollResearchProgress(fixtureObj,progressId){
+  try{
+    const r=await fetch(`/api/research-progress/${encodeURIComponent(progressId)}`,{cache:"no-store"});
+    if(!r.ok)return;
+    const p=await r.json();
+    fixtureObj.progress=p;
+    if(activeSession){
+      saveState();
+      renderSession(activeSession);
+    }
+    if(p.status==="complete"||p.status==="error")stopProgressPolling(progressId);
+  }catch{}
+}
+function startProgressPolling(fixtureObj,progressId){
+  stopProgressPolling(progressId);
+  pollResearchProgress(fixtureObj,progressId);
+  const timer=setInterval(()=>pollResearchProgress(fixtureObj,progressId),1100);
+  researchPollers.set(progressId,timer);
+}
+function progressHtml(f,latest){
+  if(f.status!=="researching")return "";
+  const p=f.progress||{};
+  const round=f.pendingRound||((f.rounds?.length||0)+1);
+  const pct=Math.max(0,Math.min(100,Number(p.percent||2)));
+  const stageNum=p.stageNumber||1,total=p.totalStages||10;
+  const logs=(p.logs||[]).slice(-4);
+  return `<div class="research-live">
+    <div class="research-live-head">
+      <div><span class="research-pulse"></span><span class="research-live-title">Round ${esc(round)} is actively researching</span><br>
+      <span class="tiny muted">Stage ${esc(stageNum)}/${esc(total)} — ${esc(p.stage||"Starting research")}</span></div>
+      <div class="research-live-percent">${Math.round(pct)}%</div>
+    </div>
+    <div class="research-live-track"><div class="research-live-fill" style="width:${pct}%"></div></div>
+    <div><strong>${esc(p.message||"Preparing a fresh independent research round…")}</strong></div>
+    <div class="tiny muted">Elapsed: ${esc(elapsedText(p.startedAt||f.progressStartedAt))}${p.updatedAt?` • last update ${esc(new Date(p.updatedAt).toLocaleTimeString())}`:""}</div>
+    ${logs.length?`<div class="research-log">${logs.map(x=>`<div>• ${esc(x.message)}</div>`).join("")}</div>`:""}
+  </div>`;
+}
+
 document.getElementById("startBtn").onclick=async()=>{
  const fixtures=parseLines("fixturesInput"),markets=parseLines("marketsInput");
  if(!fixtures.length){alert("Paste at least one fixture.");return}
@@ -206,6 +289,7 @@ async function runSession(session){
    status.textContent=`Stage 1/4 — DATA COLLECTION for ${i+1}/${session.fixtures.length}: ${f.name}`;
    prog.firstElementChild.style.width=`${Math.round((i/session.fixtures.length)*100)}%`;
    try{const result=await researchFixture(f,1);f.rounds.push(result);f.status="done";delete f.error}catch(e){f.status="error";f.error=e.message}
+   delete f.pendingRound;delete f.progressId;
    saveState();renderSession(session)
  }
  prog.firstElementChild.style.width="100%";
@@ -217,12 +301,50 @@ async function runSession(session){
   btn.disabled=false
 }
 async function researchFixture(fixtureObj,round){
- const r=await fetch("/api/research",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({fixture:fixtureObj.name,originalMarket:fixtureObj.originalMarket,round,previousRounds:fixtureObj.rounds.map(x=>x.analysis)})});
- const d=await r.json();if(!r.ok)throw new Error(d.error||"Research failed");return d
+ const progressId=createProgressId(round);
+ fixtureObj.progressId=progressId;
+ fixtureObj.pendingRound=round;
+ fixtureObj.progressStartedAt=new Date().toISOString();
+ fixtureObj.progress={id:progressId,percent:2,stage:"Starting research round",stageNumber:1,totalStages:10,status:"running",message:`Round ${round}: preparing a fresh independent research cycle.`,startedAt:fixtureObj.progressStartedAt,logs:[]};
+ saveState();
+ if(activeSession)renderSession(activeSession);
+ startProgressPolling(fixtureObj,progressId);
+ try{
+   const r=await fetch("/api/research",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+     fixture:fixtureObj.name,originalMarket:fixtureObj.originalMarket,round,
+     progressId,
+     councilSize:Number(document.getElementById("councilSize")?.value||8),
+     previousRounds:fixtureObj.rounds.map(x=>x.analysis)
+   })});
+   const d=await r.json();
+   if(!r.ok)throw new Error(d.error||"Research failed");
+   fixtureObj.progress={...(fixtureObj.progress||{}),percent:100,stage:"Complete",stageNumber:10,totalStages:10,status:"complete",message:`Round ${round} completed successfully.`,updatedAt:new Date().toISOString()};
+   return d;
+ }finally{
+   stopProgressPolling(progressId);
+ }
 }
 async function relearn(sessionId,index){
- const s=state.sessions.find(x=>x.id===sessionId);if(!s)return;const f=s.fixtures[index],next=f.rounds.length+1;f.status="researching";saveState();renderSession(s);
- try{const d=await researchFixture(f,next);f.rounds.push(d);f.status="done";delete f.error}catch(e){f.status="error";f.error=e.message}
+ const s=state.sessions.find(x=>x.id===sessionId);if(!s)return;
+ const f=s.fixtures[index];
+ if(f.status==="researching"){alert(`Round ${f.pendingRound||f.rounds.length+1} is already running.`);return}
+ const next=f.rounds.length+1;
+ f.status="researching";f.pendingRound=next;delete f.error;
+ saveState();renderSession(s);
+ const status=document.getElementById("runStatus");
+ status.classList.remove("hidden");status.className="status";
+ status.textContent=`Round ${next} started for ${f.name}. Live stage-by-stage progress is shown inside the fixture card.`;
+ try{
+   const d=await researchFixture(f,next);
+   f.rounds.push(d);f.status="done";delete f.error;
+   status.className="status good";
+   status.textContent=`Round ${next} completed for ${f.name}. Compare it with the previous round below.`;
+ }catch(e){
+   f.status="error";f.error=e.message;
+   status.className="status bad";
+   status.textContent=`Round ${next} stopped: ${e.message}`;
+ }
+ delete f.pendingRound;delete f.progressId;
  saveState();renderSession(s)
 }
 function coverageHtml(list=[]){return `<div class="coverage">${list.map(x=>`<div class="cov ${esc(x.status)}"><strong>${esc(x.item.replaceAll("_"," "))}</strong><br><span class="muted">${esc(x.status)} — ${esc(x.note)}</span></div>`).join("")}</div>`}
@@ -361,13 +483,27 @@ function valueAuditHtml(round){
 }
 
 
+
+function temporalGuardHtml(round){
+ const t=round.temporalGuard||{};
+ if(!t.mode)return "";
+ const good=t.mode==="PREMATCH";
+ const cls=good?"VERIFIED":"FAILED";
+ return `<div class="auth">
+   <div class="fixture-head"><strong>⏱️ Pre-Match Integrity Guard</strong><span class="pill ${cls}">${esc(t.mode)}</span></div>
+   <p class="tiny"><strong>Betting analysis allowed:</strong> ${t.bettingAllowed?"YES":"NO"}</p>
+   <p class="tiny">${esc(t.reason||"")}</p>
+   ${!t.bettingAllowed?`<div class="status warn"><strong>Post-match leakage protection:</strong> result reports, goalscorers, cards and post-match comments from this target fixture cannot be used to manufacture a pre-match prediction.</div>`:""}
+ </div>`;
+}
+
 function councilHtml(round){
- const c=round.aiCouncil||{},agg=c.aggregation||{},members=c.members||[];
- const conv=agg.convergence||"NONE",cls=conv==="HIGH"?"VERIFIED":conv==="MEDIUM"?"CAUTION":"FAILED";
+ const c=round.aiCouncil||{},agg=c.aggregation||{},members=c.members||[],counts=c.counts||{};
+ const conv=agg.convergence||"NONE",cls=conv==="HIGH"?"VERIFIED":(conv==="MEDIUM"||conv==="LOW")?"CAUTION":"FAILED";
  return `<div class="chartbox">
  <div class="fixture-head"><div><div class="chart-title">🧠 Independent AI Council</div><span class="tiny muted">Same evidence pack • bookmaker odds hidden</span></div><span class="pill ${cls}">${esc(conv)} CONVERGENCE</span></div>
- <p><strong>Council consensus:</strong> <span style="color:var(--gold)">${esc(agg.consensusMarket||"NO CONSENSUS")}</span>${agg.medianFairProbabilityPct!=null?` • median fair ${esc(Math.round(agg.medianFairProbabilityPct*10)/10)}%`:""}</p>
- <p class="tiny muted">${esc(agg.note||"")}</p>
+ <p><strong>${conv==="INSUFFICIENT"?"Council status":"Council consensus"}:</strong> <span style="color:var(--gold)">${esc(agg.consensusMarket||"NO CONSENSUS")}</span>${agg.medianFairProbabilityPct!=null?` • median fair ${esc(Math.round(agg.medianFairProbabilityPct*10)/10)}%`:""}</p>${agg.leadingSingleModelMarket?`<p class="tiny"><strong>Single-model opinion only:</strong> ${esc(agg.leadingSingleModelMarket)}</p>`:""}
+ <p class="tiny muted">${esc(agg.note||"")} • Agent seats ${esc(counts.agentSeats??members.length)} • Available ${esc(counts.availableAgents??members.filter(x=>x.available).length)} • Unique models ${esc(counts.uniqueModels??"—")} • Specialist agents ${esc(counts.specialistAgents??0)}</p>${c.warning?`<p class="tiny" style="color:var(--warn)">${esc(c.warning)}</p>`:""}
  <div class="council-grid">${members.map(m=>`<div class="council-card"><div class="council-model">${esc(m.modelName||m.provider||"AI")}</div>${m.available?`<div class="council-market">${esc(m.primaryMarket||"UNRESOLVED")}</div><div class="tiny">Fair: <strong>${m.fairProbabilityPct==null?"—":esc(m.fairProbabilityPct)+"%"}</strong> • ${esc(m.confidence||"")}</div><div class="tiny muted">Support: ${esc((m.strongestReasons||[]).slice(0,3).join(" • "))}</div><div class="tiny muted">Counter: ${esc((m.counterEvidence||[]).slice(0,3).join(" • "))}</div>`:`<div class="tiny" style="color:var(--danger)">Unavailable: ${esc(m.error||"provider failed")}</div>`}</div>`).join("")}</div>
  ${round.finalConvergence?`<div class="status ${String(round.finalConvergence.status).includes("CONVERGED")?"good":String(round.finalConvergence.status).includes("DISAGREE")?"warn":""}"><strong>${esc(round.finalConvergence.status)}</strong><br>${esc(round.finalConvergence.note||"")}<br><span class="tiny">Primary: ${esc(round.finalConvergence.primaryMarket||"")} • Council: ${esc(round.finalConvergence.councilMarket||"")}</span></div>`:""}
  </div>`;
@@ -411,6 +547,7 @@ function externalBenchmarksHtml(round){
 function analysisHtml(round){
  const a=round.analysis||{},ck=classKey(a.classification);
  return `${researchStagesHtml(round)}
+ ${temporalGuardHtml(round)}
  ${authHtml(round)}
  ${videoReviewHtml(round)}
  ${evidenceQualityHtml(a)}
@@ -429,15 +566,21 @@ function analysisHtml(round){
  <details><summary>Match profile</summary>${Object.entries(a.matchProfile||{}).map(([k,v])=>`<p class="tiny"><strong>${esc(k)}:</strong> ${esc(v)}</p>`).join("")}</details>
  <details><summary>Data coverage checkpoint</summary>${coverageHtml(a.dataCoverage||[])}</details>
  <details><summary>Missing data / anti-bias</summary><p class="tiny"><strong>Missing:</strong> ${esc((a.missingData||[]).join(" • "))}</p><p class="tiny"><strong>Anti-bias:</strong> ${esc(a.antiBiasCheck||"")}</p><p class="tiny"><strong>Convergence:</strong> ${esc(a.roundConvergence||"")}</p></details>
- <details><summary>Sources used in final synthesis (${round.sources?.length||0})</summary>${sourceHtml(round.sources||[])}</details>
+ <details><summary>Fallback / Cross-check Data Providers</summary>
+<p class="tiny"><strong>football-data.org:</strong> ${esc(round.fallbackEvidence?.footballDataOrg?.available?"fixture cross-check available":round.fallbackEvidence?.footballDataOrg?.reason||"not available")}</p>
+<p class="tiny"><strong>TheSportsDB:</strong> ${esc(round.fallbackEvidence?.theSportsDB?.available?"fixture cross-check available":round.fallbackEvidence?.theSportsDB?.reason||"limited / no match")}</p>
+<p class="tiny"><strong>ScoreBat:</strong> ${esc(round.fallbackEvidence?.scoreBat?.available?`${round.fallbackEvidence.scoreBat.matches?.length||0} supplementary highlight match(es) found`:round.fallbackEvidence?.scoreBat?.reason||"not configured / no matching free-feed video")}</p>
+</details>
+<details><summary>Sources used in final synthesis (${round.sources?.length||0})</summary>${sourceHtml(round.sources||[])}</details>
  <details><summary>ALL SOURCES SCOUTED (${round.sourceAudit?.allScoutedLinks?.length||0} links)</summary>${allSourcesHtml(round)}</details>`
 }
 function renderSession(session){
  activeSession=session;const box=results;
  box.innerHTML=`<div class="panel"><div class="fixture-head"><div><h2>Session</h2><span class="muted tiny">${fmtDate(session.createdAt)}</span></div><button class="secondary" onclick="exportSession('${session.id}')">Export Session</button></div>
- ${session.fixtures.map((f,i)=>{const latest=f.rounds.at(-1),a=latest?.analysis||{};return `<div class="fixture"><div class="fixture-head"><div><div class="fixture-title">${i+1}. ${esc(f.name)}</div>${f.originalMarket?`<div class="tiny muted">Original: ${esc(f.originalMarket)}</div>`:""}</div><div>${f.status==="researching"?'<span class="pill">Verifying…</span>':f.status==="error"?'<span class="pill UNRESOLVED">Error</span>':latest?`<span class="pill ${esc(classKey(a.classification))}">Round ${f.rounds.length}</span>`:'<span class="pill">Waiting</span>'}</div></div>
+ ${session.fixtures.map((f,i)=>{const latest=f.rounds.at(-1),a=latest?.analysis||{};return `<div class="fixture"><div class="fixture-head"><div><div class="fixture-title">${i+1}. ${esc(f.name)}</div>${f.originalMarket?`<div class="tiny muted">Original: ${esc(f.originalMarket)}</div>`:""}</div><div>${f.status==="researching"?`<span class="pill CAUTION">Round ${esc(f.pendingRound||f.rounds.length+1)} running…</span>`:f.status==="error"?'<span class="pill UNRESOLVED">Error</span>':latest?`<span class="pill ${esc(classKey(a.classification))}">Round ${f.rounds.length}</span>`:'<span class="pill">Waiting</span>'}</div></div>
+ ${progressHtml(f,latest)}
  ${f.error?`<div class="status bad">${esc(f.error)}</div>`:""}${latest?analysisHtml(latest):""}
- <div class="actions">${latest?`<button class="secondary" onclick="relearn('${session.id}',${i})">Relearn — Fresh Round ${f.rounds.length+1}</button>`:""}${f.rounds.length>1?`<button class="secondary" onclick="showRounds('${session.id}',${i})">Compare ${f.rounds.length} Rounds</button>`:""}</div></div>`}).join("")}</div>`
+ <div class="actions">${latest?`<button class="secondary" ${f.status==="researching"?"disabled":""} onclick="relearn('${session.id}',${i})">${f.status==="researching"?`Round ${esc(f.pendingRound||f.rounds.length+1)} running…`:`Relearn — Fresh Round ${f.rounds.length+1}`}</button><button class="secondary" ${f.status==="researching"?"disabled":""} onclick="expandCouncil('${session.id}',${i},5)">+5 AI Brains</button><button class="secondary" ${f.status==="researching"?"disabled":""} onclick="expandCouncil('${session.id}',${i},10)">+10 AI Brains</button>`:""}${f.rounds.length>1?`<button class="secondary" onclick="showRounds('${session.id}',${i})">Compare ${f.rounds.length} Rounds</button>`:""}</div></div>`}).join("")}</div>`
 }
 function showRounds(sessionId,index){const s=state.sessions.find(x=>x.id===sessionId),f=s?.fixtures[index];if(!f)return;alert(`${f.name}\n\n${f.rounds.map((r,i)=>`Round ${i+1}: ${r.analysis?.finalMarket||"?"} — ${r.analysis?.classification||"?"} — Gate ${r.authenticityGate?.status||"?"}`).join("\n")}`)}
 function download(name,obj){const blob=new Blob([JSON.stringify(obj,null,2)],{type:"application/json"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;a.click();URL.revokeObjectURL(a.href)}
@@ -466,6 +609,35 @@ function renderPostboard(){
  postboardList.innerHTML=`<div class="post-row post-head"><div>Fixture / evidence</div><div>Primary market</div><div>AI Council</div><div>Value</div></div>`+rows.map(x=>`<div class="post-row"><div><strong>${esc(x.fixture)}</strong><br><span class="tiny muted">${esc(fmtDate(x.date))} • Evidence ${esc(x.evidence)}/100</span></div><div><strong>${esc(x.market)}</strong><br><span class="tiny muted">${esc(x.classification)}</span></div><div><strong>${esc(x.council)}</strong><br><span class="tiny muted">${esc(x.councilMarket)}</span></div><div>${x.value?`<strong style="color:var(--good)">POTENTIAL VALUE</strong><br><span class="tiny">${esc(x.value.market)} • +${esc(x.value.edgePercentagePoints)}pp</span>`:'<span class="muted">No clear value</span>'}</div></div>`).join("");
 }
 document.getElementById("refreshPostboard").onclick=renderPostboard;
+
+
+async function expandCouncil(sessionId,index,addCount){
+ const s=state.sessions.find(x=>x.id===sessionId),f=s?.fixtures?.[index],round=f?.rounds?.at(-1);
+ if(!round)return;
+ const current=round.aiCouncil?.members?.length||0,target=Math.min(50,current+addCount);
+ if(target<=current){alert("This match already has 50 council agent seats.");return}
+ if(target>=20&&!confirm(`Expand this match from ${current} to ${target} AI agent seats?\n\nLarge councils use many free API requests and may hit provider limits. Continue?`))return;
+ f.status="researching";saveState();renderSession(s);
+ try{
+   const r=await fetch("/api/council-expand",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+     fixture:f.name,targetSize:target,authenticityGate:round.authenticityGate,sources:round.sources||[],
+     videoReview:round.videoReview||{},fallbackEvidence:round.fallbackEvidence||{},existingMembers:round.aiCouncil?.members||[]
+   })});
+   const d=await r.json();if(!r.ok)throw new Error(d.error||"Council expansion failed");
+   round.aiCouncil=d.aiCouncil;f.status="done";
+ }catch(e){f.status="done";alert(e.message)}
+ saveState();renderSession(s);
+}
+async function refreshProviderBoard(){
+ const box=document.getElementById("providerBoard");
+ box.innerHTML='<div class="chart-title">🔌 Provider & Quota Board</div><p class="tiny">Loading…</p>';
+ try{
+   const r=await fetch("/api/provider-status",{cache:"no-store"}),d=await r.json(),cfg=d.configured||{},u=d.usage||{};
+   const rows=[["API-Football",cfg.apiFootball,u.apiFootball],["Tavily",cfg.tavily,u.tavily],["football-data.org",cfg.footballDataOrg,u.footballDataOrg],["TheSportsDB",cfg.theSportsDB,u.theSportsDB],["ScoreBat",cfg.scoreBat,u.scoreBat],["Gemini",cfg.gemini,u.gemini],["Groq",cfg.groq,u.groq],["Cloudflare",cfg.cloudflare,u.cloudflare],["OpenRouter",cfg.openrouter,u.openrouter]];
+   box.innerHTML=`<div class="chart-title">🔌 Provider & Quota Board</div><div class="coverage">${rows.map(([name,on,x])=>`<div class="cov ${on?"complete":"partial"}"><strong>${esc(name)}</strong><br><span class="tiny">${on?"configured":"not configured"} • calls ${esc(x?.calls??0)} • success ${esc(x?.success??0)} • fail ${esc(x?.fail??0)}</span>${x?.lastQuota?.dailyRemaining!=null?`<br><span class="tiny muted">Daily remaining ${esc(x.lastQuota.dailyRemaining)} / ${esc(x.lastQuota.dailyLimit||"—")}</span>`:""}${x?.lastError?`<br><span class="tiny" style="color:var(--warn)">${esc(x.lastError)}</span>`:""}</div>`).join("")}</div><p class="tiny muted">OpenRouter zero-price models visible: ${esc(d.openRouterFreeModelsCount??0)}. These counters reset when the free Render instance restarts.</p>`;
+ }catch(e){box.innerHTML=`<div class="chart-title">🔌 Provider & Quota Board</div><div class="status bad">${esc(e.message)}</div>`}
+}
+document.getElementById("refreshProviders").onclick=refreshProviderBoard;
 
 function renderHistory(){if(!state.sessions.length){historyList.innerHTML='<p class="muted">No saved sessions yet.</p>';return}historyList.innerHTML=state.sessions.map(s=>`<div class="session-row"><div><strong>${s.fixtures.length} fixtures</strong><br><span class="tiny muted">${fmtDate(s.createdAt)}</span></div><div class="right"><button class="secondary" onclick="openSession('${s.id}')">Open</button> <button class="danger" onclick="deleteSession('${s.id}')">Delete</button></div></div>`).join("")}
 window.openSession=id=>{const s=state.sessions.find(x=>x.id===id);if(!s)return;document.querySelector('[data-tab="session"]').click();renderSession(s)}

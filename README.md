@@ -1,4 +1,4 @@
-# Football Fact-First Research v3.2 — Actual External Predictions
+# Football Fact-First Research v3.6 — Live Research Tracker
 
 
 This version is designed specifically to prevent stale-player mistakes such as describing a footballer as being at an old club after a transfer.
@@ -270,3 +270,120 @@ If the site has an exact fixture page but does not publish a clear prediction, t
 NO VALID PREDICTION rather than inferring one from statistics.
 
 External benchmark consensus is calculated only from successfully extracted current predictions.
+
+
+## v3.3 — malformed AI JSON recovery
+
+This hotfix addresses errors such as:
+
+Expected ',' or ']' after array element in JSON
+
+The research data was not necessarily wrong; the AI had returned a syntactically malformed JSON object.
+
+v3.3 now:
+- uses `jsonrepair` before rejecting an AI response;
+- repairs common missing commas, quotes, brackets and other JSON syntax defects;
+- applies the same repair path to primary analysis, AI Council, external-prediction parsing and video-review JSON;
+- if primary Gemini analysis is still malformed after repair, automatically asks for one fresh clean-JSON response;
+- no longer labels the entire session "complete" when one or more fixtures ended in an error.
+
+GitHub update requires:
+- server.js
+- package.json
+- public/index.html
+
+Render will run `npm install`, install jsonrepair and redeploy automatically.
+
+
+## v3.4 — fallback data and quota resilience
+
+Added:
+- football-data.org optional free fallback
+- TheSportsDB V1 free fallback (key 123)
+- ScoreBat optional limited free highlight feed
+- automatic fallback authenticity mode if API-Football is unavailable or quota-limited
+- fallback discovery for upcoming games
+- provider/quota dashboard
+
+## Expandable Council
+
+Initial council size: 5, 8, 12, or 20 agents.
+After research, use +5 AI Brains or +10 AI Brains repeatedly up to 50 agent seats.
+
+The app distinguishes UNIQUE MODELS from SPECIALIST AGENTS.
+It dynamically uses current zero-price OpenRouter models when configured, plus Gemini/Groq/Cloudflare models.
+If distinct models are exhausted, specialist agents provide independent lenses such as corners, goals, tactics, lineups, opponent strength and adversarial testing.
+
+50 is supported as an agent-seat ceiling, not a promise of 50 different model families.
+Large councils can hit free-provider quotas, so the UI warns before heavy expansion.
+
+
+## v3.5 critical integrity hotfix
+
+The Everton vs Wolverhampton test exposed several important issues.
+
+### 1. Pre-match temporal integrity
+The app now determines whether the verified fixture is:
+- PREMATCH
+- LIVE_OR_STARTED
+- POST_MATCH_AUDIT
+- UNKNOWN
+
+If the fixture has started/finished, or kickoff cannot be verified, the app blocks new betting recommendations,
+AI-council consensus, external prediction benchmarking and value pricing.
+
+This prevents post-match reports, goalscorers, red cards and actual results from leaking into what appears to be a pre-match prediction.
+
+### 2. Better API-Football team resolution
+If an exact team search is weak, the app automatically retries cleaned/alias variants such as:
+Everton FC -> Everton
+Wolverhampton Wanderers -> Wolverhampton / Wolves
+Lokomotiv Moscow -> Lokomotiv Moskva
+Krylia Sovetov Samara -> Krylya Sovetov
+
+Extra searches happen only when the first exact lookup is weak, to preserve quota.
+
+### 3. Gemini highlight-video repair
+@google/genai is upgraded to >= 2.0.0 to use the current Interactions API schema.
+The existing direct public YouTube URL video-review flow is retained.
+
+### 4. Council semantics
+One responding model is no longer labelled a council consensus.
+With fewer than two available council members, status is INSUFFICIENT and the app labels it as a single-model opinion.
+
+### 5. Stale-browser update protection
+index.html, manifest and service worker are now served with no-cache headers.
+The v3.5 service worker activates immediately so GitHub/Render updates stop leaving the old UI visible.
+
+
+## v3.6 — live research progress and Round 2 fix
+
+The Relearn / Fresh Round workflow now gives immediate visible feedback.
+
+Every round reports live progress from the server across ten stages:
+
+1. Starting research round
+2. Fixture verification
+3. Fallback cross-checks
+4. Fresh web scouting
+5. Video scouting / review
+6. Data analysis
+7. Independent AI Council
+8. External prediction benchmarks
+9. Odds & value audit
+10. Presentation
+
+Each fixture card displays:
+- current round number;
+- current stage and percentage;
+- current server-side activity/comment;
+- elapsed time;
+- the four most recent progress messages.
+
+The Relearn button is disabled while a round is already running, preventing accidental duplicate research.
+If Round 2 fails, the exact server error is shown instead of appearing to do nothing.
+
+The server exposes a temporary no-store endpoint:
+GET /api/research-progress/:progressId
+
+Progress records expire from memory after 45 minutes and do not add API usage.

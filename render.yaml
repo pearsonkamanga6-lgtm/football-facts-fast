@@ -25,3 +25,9 @@ services:
         sync: false
       - key: APP_PUBLIC_URL
         sync: false
+      - key: FOOTBALL_DATA_ORG_KEY
+        sync: false
+      - key: SCOREBAT_TOKEN
+        sync: false
+      - key: THESPORTSDB_API_KEY
+        value: "123"
