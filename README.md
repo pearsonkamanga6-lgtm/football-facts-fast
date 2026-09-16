@@ -1,4 +1,4 @@
-# Football Fact-First Research v3.1 — Gemini 503 Resilience Hotfix
+# Football Fact-First Research v3.2 — Actual External Predictions
 
 
 This version is designed specifically to prevent stale-player mistakes such as describing a footballer as being at an old club after a transfer.
@@ -244,3 +244,29 @@ The OpenAI-family free council member is GPT-OSS 120B through Groq when GROQ_API
 
 ## v3.1 hotfix
 Google documents HTTP 503 UNAVAILABLE as a transient overload condition and recommends exponential backoff. This build retries automatically and then falls back through Gemini 3.7 Flash, Gemini 3.6 Flash and Gemini 3.5 Flash-Lite before giving up.
+
+
+## v3.2 — actual external predictions, not link lists
+
+External benchmark sites are now processed as evidence sources rather than link directories.
+
+For Forebet, PredictZ, WinDrawWin and FootyStats the app now:
+1. searches for the exact fixture;
+2. rejects search results that do not match both teams;
+3. uses Tavily Extract to retrieve the actual page content;
+4. asks Gemini to extract ONLY an explicitly published prediction from that source;
+5. suppresses stale or unrelated match pages;
+6. displays:
+   - exact published prediction;
+   - market/selection;
+   - probability when the source publishes one;
+   - correct score when published;
+   - other explicit markets when present;
+   - a concise paraphrase of the source's explanation/trends/reasoning when available;
+   - the direct source URL;
+   - fixture date and freshness status.
+
+If the site has an exact fixture page but does not publish a clear prediction, the app says
+NO VALID PREDICTION rather than inferring one from statistics.
+
+External benchmark consensus is calculated only from successfully extracted current predictions.

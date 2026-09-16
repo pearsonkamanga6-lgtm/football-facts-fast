@@ -989,20 +989,261 @@ async function apiFootballPrediction(fixtureId){
     }};
   }catch(err){return {available:false,checkedAt:isoNow(),reason:err.message};}
 }
+
+async function tavilyExtractUrl(url, query=""){
+  const key=requireEnv("TAVILY_API_KEY");
+  const body={
+    urls:[url],
+    extract_depth:"advanced",
+    format:"markdown",
+    include_images:false,
+    timeout:30
+  };
+  if(query){
+    body.query=query;
+    body.chunks_per_source=5;
+  }
+  const response=await fetch("https://api.tavily.com/extract",{
+    method:"POST",
+    headers:{"Content-Type":"application/json","Authorization":`Bearer ${key}`},
+    body:JSON.stringify(body)
+  });
+  const text=await response.text();
+  if(!response.ok)throw new Error(`Tavily extract failed (${response.status}): ${text.slice(0,260)}`);
+  const data=JSON.parse(text);
+  const item=(data.results||[])[0]||null;
+  if(!item)return {ok:false,url,content:"",failed:data.failed_results||[]};
+  return {ok:true,url:item.url||url,content:String(item.raw_content||""),failed:data.failed_results||[]};
+}
+
+function meaningfulTeamTokens(name){
+  const stop=new Set(["fc","cf","afc","ac","sc","fk","club","football","futbol","soccer","the","de","del","cd","ud","ssd"]);
+  return normalizeTeamName(name).split(" ").filter(x=>x.length>1&&!stop.has(x));
+}
+function teamTextScore(team,text){
+  const norm=normalizeTeamName(text);
+  const phrase=normalizeTeamName(team);
+  if(!phrase||!norm)return 0;
+  if(norm.includes(phrase))return 1;
+  const tokens=meaningfulTeamTokens(team);
+  if(!tokens.length)return 0;
+  const hit=tokens.filter(t=>norm.includes(t)).length;
+  return hit/tokens.length;
+}
+function benchmarkCandidateScore(result,home,away,date){
+  const hay=`${result.title||""} ${result.content||""} ${result.url||""}`;
+  const hs=teamTextScore(home,hay),as=teamTextScore(away,hay);
+  if(hs<0.5||as<0.5)return 0;
+  let score=hs+as;
+  const d=String(date||"");
+  if(d && hay.includes(d))score+=1;
+  const year=d.slice(0,4);
+  if(year && hay.includes(year))score+=0.25;
+  if(/prediction|tip|forecast|correct score|btts|over|under/i.test(hay))score+=0.25;
+  return score;
+}
+function selectBenchmarkCandidates(results,home,away,date){
+  return (results||[])
+    .map(r=>({...r,_matchScore:benchmarkCandidateScore(r,home,away,date)}))
+    .filter(r=>r._matchScore>0)
+    .sort((a,b)=>b._matchScore-a._matchScore)
+    .slice(0,3);
+}
+function benchmarkParsePrompt({siteName,home,away,expectedDate,url,title,content}){
+  return `You are extracting an EXTERNAL FOOTBALL PREDICTION from one source page.
+
+SOURCE: ${siteName}
+TARGET FIXTURE: ${home} vs ${away}
+EXPECTED DATE: ${expectedDate||"unknown"}
+SOURCE URL: ${url}
+SOURCE TITLE: ${title||""}
+
+PAGE CONTENT:
+${String(content||"").slice(0,18000)}
+
+STRICT RULES:
+1. Use ONLY the source-page content above. Do not use your own football knowledge.
+2. The prediction must belong to ${home} vs ${away}; do not accidentally use another match on the same page.
+3. If the exact target fixture is not present, set fixtureMatched=false and predictionAvailable=false.
+4. If a prediction is not explicitly published by the source, set predictionAvailable=false.
+5. Do not turn statistics or odds alone into a prediction.
+6. Extract all clearly published prediction markets you can identify: 1X2, correct score, goals, BTTS,
+   double chance, corners/cards or other markets if explicitly present.
+7. If the source gives probabilities, preserve the published percentages.
+8. If the source gives an explanation, trends, form argument or statistical reasoning, PARAPHRASE it
+   concisely in rationaleSummary. Do not invent an explanation.
+9. If the source provides no explanation, explanationAvailable=false and rationaleSummary=[].
+10. Judge freshness from the page. If a page date clearly conflicts with the expected/current fixture,
+    mark freshnessStatus=STALE and predictionAvailable=false.
+11. canonicalMarketKey should represent the source's PRIMARY prediction in a stable form, e.g.
+    HOME_WIN, AWAY_WIN, DRAW, BTTS_YES, BTTS_NO, TOTAL_GOALS_OVER_2.5, TOTAL_GOALS_UNDER_2.5,
+    HOME_DOUBLE_CHANCE_1X, AWAY_DOUBLE_CHANCE_X2, or another clear stable key.
+
+Return ONLY JSON:
+{
+  "fixtureMatched":true,
+  "matchedFixture":"...",
+  "fixtureDate":"...",
+  "freshnessStatus":"CURRENT|STALE|UNKNOWN",
+  "predictionAvailable":true,
+  "primaryPrediction":{
+    "market":"1X2",
+    "selection":"Away Win",
+    "canonicalMarketKey":"AWAY_WIN",
+    "probabilityPct":41,
+    "correctScore":"0-1",
+    "publishedOdds":""
+  },
+  "otherPredictions":[
+    {"market":"Correct Score","selection":"0-1","probabilityPct":null}
+  ],
+  "explanationAvailable":true,
+  "rationaleSummary":["...","..."],
+  "sourceEvidenceSummary":"Short paraphrase of what the source actually publishes for this fixture.",
+  "warnings":[]
+}`;
+}
+async function parseBenchmarkPrediction(payload){
+  try{
+    const result=await geminiTextWithRetry({
+      prompt:benchmarkParsePrompt(payload),
+      maxOutputTokens:3000,
+      responseMimeType:"application/json",
+      preferredModel:process.env.GEMINI_MODEL||"gemini-3.8-flash"
+    });
+    const parsed=parseJsonObject(result.output,`${payload.siteName} benchmark parser`);
+    parsed.parserModel=result.model;
+    return parsed;
+  }catch(err){
+    return {
+      fixtureMatched:false,
+      freshnessStatus:"UNKNOWN",
+      predictionAvailable:false,
+      primaryPrediction:null,
+      otherPredictions:[],
+      explanationAvailable:false,
+      rationaleSummary:[],
+      sourceEvidenceSummary:"",
+      warnings:[`Prediction parser failed: ${err.message}`]
+    };
+  }
+}
+async function exactWebsitePrediction({name,domain,home,away,date}){
+  const year=(date||zambiaDate(0)).slice(0,4);
+  const queries=[
+    `site:${domain} "${home}" "${away}" ${date||""} prediction`,
+    `site:${domain} "${home}" "${away}" ${year} tip forecast`
+  ];
+  let searchResults=[];
+  for(const q of queries){
+    try{
+      const r=await tavilySearch(q);
+      searchResults.push(...r.map(x=>({...x,_query:q})));
+    }catch{}
+  }
+  // Deduplicate and enforce both-team fixture identity before extracting pages.
+  const seen=new Set();
+  searchResults=searchResults.filter(r=>{
+    if(!r.url||seen.has(r.url))return false;
+    seen.add(r.url);return true;
+  });
+  const candidates=selectBenchmarkCandidates(searchResults,home,away,date);
+  if(!candidates.length){
+    return {
+      name,domain,status:"NO_EXACT_FIXTURE_SOURCE",found:false,
+      predictionAvailable:false,
+      explanationAvailable:false,
+      prediction:null,rationaleSummary:[],
+      sourceUrl:"",sourceTitle:"",
+      diagnostics:{queries,searchResultCount:searchResults.length}
+    };
+  }
+
+  const focus=`${home} vs ${away} ${date||""} prediction correct score 1X2 BTTS over under probability explanation`;
+  for(const c of candidates){
+    let extracted;
+    try{extracted=await tavilyExtractUrl(c.url,focus)}catch(err){extracted={ok:false,content:"",error:err.message,url:c.url};}
+    const pageContent=extracted.ok&&extracted.content ? extracted.content : `${c.title}\n${c.content}`;
+    const parsed=await parseBenchmarkPrediction({
+      siteName:name,home,away,expectedDate:date,url:c.url,title:c.title,content:pageContent
+    });
+    if(parsed.fixtureMatched && parsed.predictionAvailable && parsed.freshnessStatus!=="STALE"){
+      return {
+        name,domain,status:"PREDICTION_EXTRACTED",found:true,
+        predictionAvailable:true,
+        explanationAvailable:Boolean(parsed.explanationAvailable),
+        prediction:parsed.primaryPrediction||null,
+        otherPredictions:Array.isArray(parsed.otherPredictions)?parsed.otherPredictions:[],
+        rationaleSummary:Array.isArray(parsed.rationaleSummary)?parsed.rationaleSummary:[],
+        sourceEvidenceSummary:String(parsed.sourceEvidenceSummary||""),
+        fixtureDate:String(parsed.fixtureDate||""),
+        freshnessStatus:String(parsed.freshnessStatus||"UNKNOWN"),
+        sourceUrl:c.url,
+        sourceTitle:c.title,
+        sourcePublishedDate:c.published_date||"",
+        warnings:Array.isArray(parsed.warnings)?parsed.warnings:[],
+        parserModel:parsed.parserModel||"",
+        diagnostics:{queries,searchResultCount:searchResults.length,candidateCount:candidates.length,extracted:Boolean(extracted.ok)}
+      };
+    }
+  }
+  return {
+    name,domain,status:"NO_CURRENT_EXPLICIT_PREDICTION",found:true,
+    predictionAvailable:false,explanationAvailable:false,
+    prediction:null,otherPredictions:[],rationaleSummary:[],
+    sourceEvidenceSummary:"An exact or near-exact fixture page was found, but no current explicit prediction could be safely extracted.",
+    sourceUrl:candidates[0]?.url||"",sourceTitle:candidates[0]?.title||"",
+    freshnessStatus:"UNKNOWN",
+    warnings:["Unrelated or stale prediction links were suppressed instead of being shown as valid benchmarks."],
+    diagnostics:{queries,searchResultCount:searchResults.length,candidateCount:candidates.length}
+  };
+}
+function externalBenchmarkConsensus(websites=[]){
+  const valid=(websites||[]).filter(x=>x.predictionAvailable&&x.prediction?.canonicalMarketKey);
+  const groups=new Map();
+  for(const x of valid){
+    const k=canonicalKey(x.prediction.canonicalMarketKey);
+    if(!groups.has(k))groups.set(k,[]);
+    groups.get(k).push(x.name);
+  }
+  const ranked=[...groups.entries()].map(([key,sites])=>({key,count:sites.length,sites}))
+    .sort((a,b)=>b.count-a.count);
+  const top=ranked[0]||null;
+  return {
+    availablePredictions:valid.length,
+    consensusCanonicalKey:top?.key||"",
+    consensusCount:top?.count||0,
+    sitesAgreeing:top?.sites||[],
+    status:top&&top.count>=3?"HIGH":top&&top.count>=2?"MEDIUM":top?"LOW":"NONE"
+  };
+}
+
 async function externalPredictionBenchmarks(fixture,gate){
   const prediction=await apiFootballPrediction(gate?.fixture?.id);
-  const home=gate?.resolved?.home?.name||gate?.requested?.home||"",away=gate?.resolved?.away?.name||gate?.requested?.away||"";
-  const date=(gate?.fixture?.date||"").slice(0,10);
-  const targets=[["Forebet","forebet.com"],["PredictZ","predictz.com"],["WinDrawWin","windrawwin.com"],["FootyStats","footystats.org"]];
+  const home=gate?.resolved?.home?.name||gate?.requested?.home||"";
+  const away=gate?.resolved?.away?.name||gate?.requested?.away||"";
+  const date=(gate?.fixture?.date||"").slice(0,10) || zambiaDate(0);
+
+  const targets=[
+    {name:"Forebet",domain:"forebet.com"},
+    {name:"PredictZ",domain:"predictz.com"},
+    {name:"WinDrawWin",domain:"windrawwin.com"},
+    {name:"FootyStats",domain:"footystats.org"}
+  ];
+
   const websites=[];
-  for(const [name,domain] of targets){
-    const q=`site:${domain} ${home} ${away} ${date} prediction`;
-    try{
-      const results=await tavilySearch(q);
-      websites.push({name,domain,query:q,found:results.length>0,results:results.slice(0,4).map(r=>({title:r.title,url:r.url,content:r.content,published_date:r.published_date||""}))});
-    }catch(err){websites.push({name,domain,query:q,found:false,error:err.message,results:[]});}
+  for(const target of targets){
+    websites.push(await exactWebsitePrediction({...target,home,away,date}));
   }
-  return {checkedAt:isoNow(),apiFootball:prediction,websites,rule:"External prediction benchmarks are collected after independent sporting analysis and cannot choose the internal market."};
+  return {
+    checkedAt:isoNow(),
+    targetFixture:`${home} vs ${away}`,
+    targetDate:date,
+    apiFootball:prediction,
+    websites,
+    consensus:externalBenchmarkConsensus(websites),
+    rule:"External prediction benchmarks are collected after independent sporting analysis. Only exact/current fixture predictions are displayed; unrelated or stale links are suppressed."
+  };
 }
 
 function analysisPrompt({fixture,round,originalMarket,previousRounds,sources,gate,videoReview}){
@@ -1280,7 +1521,7 @@ async function geminiAnalyze(payload){
 
 app.get("/api/health",(req,res)=>{
   res.json({
-    ok:true,version:"3.1.0",
+    ok:true,version:"3.2.0",
     tavilyConfigured:Boolean(process.env.TAVILY_API_KEY),
     geminiConfigured:Boolean(process.env.GEMINI_API_KEY),
     apiFootballConfigured:Boolean(process.env.API_FOOTBALL_KEY),
@@ -1412,4 +1653,4 @@ app.post("/api/research",async(req,res)=>{
 });
 
 app.use((req,res)=>res.sendFile(path.join(__dirname,"public","index.html")));
-app.listen(PORT,()=>console.log(`Football Fact-First Research v3.1 running on port ${PORT}`));
+app.listen(PORT,()=>console.log(`Football Fact-First Research v3.2 running on port ${PORT}`));

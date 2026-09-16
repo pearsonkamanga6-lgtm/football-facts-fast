@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#071923">
-<title>Football Fact-First Research v3.1</title>
+<title>Football Fact-First Research v3.2</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon-192.png">
 <style>
@@ -38,7 +38,7 @@
 </head>
 <body>
 <div class="app">
-<div class="top"><div class="brand"><h1>⚽ Football Fact-First Research <span class="pill VERIFIED">v3.1</span></h1><small>Data Collection → Data Analysis → AI Council → Presentation • POSTBOARD</small></div><div class="badge" id="healthBadge">Checking engine…</div></div>
+<div class="top"><div class="brand"><h1>⚽ Football Fact-First Research <span class="pill VERIFIED">v3.2</span></h1><small>Data Collection → Data Analysis → AI Council → Presentation • POSTBOARD</small></div><div class="badge" id="healthBadge">Checking engine…</div></div>
 <div class="tabs"><button class="tab active" data-tab="session">Research Session</button><button class="tab" data-tab="postboard">POSTBOARD</button><button class="tab" data-tab="history">History</button><button class="tab" data-tab="settings">Setup</button></div>
 
 <section id="tab-session">
@@ -367,10 +367,39 @@ function councilHtml(round){
  </div>`;
 }
 function externalBenchmarksHtml(round){
- const b=round.externalBenchmarks||{},api=b.apiFootball||{},sites=b.websites||[];
- return `<div class="chartbox"><div class="chart-title">🌐 External Prediction Benchmarks — AFTER Internal Analysis</div><p class="tiny muted">${esc(b.rule||"Benchmarks only.")}</p>
- ${api.available?`<div class="benchmark-card"><strong>API-Football Prediction</strong><br><span class="tiny">Winner: ${esc(api.prediction?.winner||"")} • ${esc(api.prediction?.underOver||"")} • ${esc(api.prediction?.advice||"")}</span><br><span class="tiny muted">Home ${esc(api.prediction?.percent?.home||"—")} • Draw ${esc(api.prediction?.percent?.draw||"—")} • Away ${esc(api.prediction?.percent?.away||"—")}</span></div>`:`<div class="benchmark-card"><strong>API-Football Prediction:</strong> unavailable</div>`}
- ${sites.map(s=>`<div class="benchmark-card"><strong>${esc(s.name)}</strong> — ${s.found?"source(s) found":"not found"}${(s.results||[]).map(r=>`<a class="source" href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title||r.url)}</a>`).join("")}</div>`).join("")}</div>`;
+ const b=round.externalBenchmarks||{},api=b.apiFootball||{},sites=b.websites||[],cons=b.consensus||{};
+ return `<div class="chartbox">
+   <div class="fixture-head">
+     <div><div class="chart-title">🌐 External Prediction Benchmarks — ACTUAL PREDICTIONS</div>
+     <span class="tiny muted">Exact/current fixture only • unrelated old links suppressed</span></div>
+     <span class="pill ${cons.status==="HIGH"?"VERIFIED":cons.status==="MEDIUM"?"CAUTION":"FAILED"}">${esc(cons.status||"NONE")} BENCHMARK CONSENSUS</span>
+   </div>
+   <p class="tiny muted">${esc(b.rule||"Benchmarks only.")}</p>
+   ${api.available?`<div class="benchmark-card">
+      <strong>API-Football Prediction</strong><br>
+      <span class="tiny"><strong>Published view:</strong> ${esc(api.prediction?.winner||"")} ${api.prediction?.comment?`— ${esc(api.prediction.comment)}`:""}</span><br>
+      <span class="tiny"><strong>Goals:</strong> ${esc(api.prediction?.underOver||"—")} • <strong>Advice:</strong> ${esc(api.prediction?.advice||"—")}</span><br>
+      <span class="tiny muted">1X2 probabilities: Home ${esc(api.prediction?.percent?.home||"—")} • Draw ${esc(api.prediction?.percent?.draw||"—")} • Away ${esc(api.prediction?.percent?.away||"—")}</span>
+   </div>`:`<div class="benchmark-card"><strong>API-Football Prediction:</strong> unavailable for this verified fixture.</div>`}
+   ${sites.map(s=>`<div class="benchmark-card">
+      <div class="fixture-head"><strong>${esc(s.name)}</strong><span class="pill ${s.predictionAvailable?"VERIFIED":"CAUTION"}">${s.predictionAvailable?"PREDICTION EXTRACTED":"NO VALID PREDICTION"}</span></div>
+      ${s.predictionAvailable&&s.prediction?`
+        <p style="margin:7px 0"><strong>Actual prediction:</strong> <span style="color:var(--gold);font-weight:900">${esc(s.prediction.market||"")} — ${esc(s.prediction.selection||"")}</span>
+        ${s.prediction.probabilityPct!=null?` • ${esc(s.prediction.probabilityPct)}%`:""}
+        ${s.prediction.correctScore?` • Correct score ${esc(s.prediction.correctScore)}`:""}</p>
+        ${(s.otherPredictions||[]).length?`<p class="tiny"><strong>Other published predictions:</strong> ${esc(s.otherPredictions.map(x=>`${x.market}: ${x.selection}${x.probabilityPct!=null?` (${x.probabilityPct}%)`:""}`).join(" • "))}</p>`:""}
+        ${s.explanationAvailable?`<div class="status"><strong>Source explanation / reasoning</strong>${(s.rationaleSummary||[]).map(x=>`<div class="tiny" style="margin-top:5px">• ${esc(x)}</div>`).join("")}</div>`:`<p class="tiny muted">This source did not publish a usable explanation for the prediction.</p>`}
+        ${s.sourceEvidenceSummary?`<p class="tiny"><strong>What the source published:</strong> ${esc(s.sourceEvidenceSummary)}</p>`:""}
+        <a class="source" href="${esc(s.sourceUrl)}" target="_blank" rel="noopener">Open the original ${esc(s.name)} prediction ↗</a>
+        <p class="tiny muted">Fixture date: ${esc(s.fixtureDate||b.targetDate||"unknown")} • Freshness: ${esc(s.freshnessStatus||"UNKNOWN")}</p>
+      `:`
+        <p class="tiny muted">${esc(s.sourceEvidenceSummary||"No exact current explicit prediction was safely extracted.")}</p>
+        ${s.sourceUrl?`<a class="source" href="${esc(s.sourceUrl)}" target="_blank" rel="noopener">Open closest exact-fixture page ↗</a>`:""}
+        ${(s.warnings||[]).length?`<p class="tiny" style="color:var(--warn)">${esc(s.warnings.join(" • "))}</p>`:""}
+      `}
+   </div>`).join("")}
+   <p class="tiny"><strong>External benchmark consensus:</strong> ${esc(cons.status||"NONE")} • ${esc(cons.consensusCount||0)} site(s) on ${esc(cons.consensusCanonicalKey||"no common market")}${(cons.sitesAgreeing||[]).length?` • ${esc(cons.sitesAgreeing.join(", "))}`:""}</p>
+ </div>`;
 }
 
 function analysisHtml(round){
