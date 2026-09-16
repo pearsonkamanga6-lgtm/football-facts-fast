@@ -1,4 +1,4 @@
-# Football Fact-First Research v3.6 — Live Research Tracker
+# Football Fact-First Research v3.7 — Async Research Jobs
 
 
 This version is designed specifically to prevent stale-player mistakes such as describing a footballer as being at an old club after a transfer.
@@ -387,3 +387,26 @@ The server exposes a temporary no-store endpoint:
 GET /api/research-progress/:progressId
 
 Progress records expire from memory after 45 minutes and do not add API usage.
+
+
+## v3.7 — asynchronous research jobs
+
+The error:
+
+Unexpected token '<', '<!DOCTYPE '... is not valid JSON
+
+usually means the browser expected JSON but received an HTML error page from a proxy/server instead.
+A long multi-stage research request can be vulnerable to this class of infrastructure timeout.
+
+v3.7 changes the architecture:
+
+1. POST /api/research-start returns immediately with HTTP 202.
+2. The Node server continues the research job in the background.
+3. The browser polls /api/research-progress/:id for the live stage tracker.
+4. The browser polls /api/research-result/:id until the finished JSON result is available.
+5. The browser no longer keeps one multi-minute HTTP request open.
+
+This makes long Round 1 / Round 2 research much less vulnerable to Render/proxy HTML timeout pages.
+
+The browser also has a safe JSON reader. If any endpoint ever returns an HTML page,
+the user sees a clear infrastructure/provider message instead of a raw JSON parser exception.

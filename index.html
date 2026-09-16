@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#071923">
-<title>Football Fact-First Research v3.6</title>
+<title>Football Fact-First Research v3.7</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon-192.png">
 <style>
@@ -49,7 +49,7 @@
 </head>
 <body>
 <div class="app">
-<div class="top"><div class="brand"><h1>⚽ Football Fact-First Research <span class="pill VERIFIED">v3.6</span></h1><small>Live research tracker • visible Round 2+ progress • pre-match integrity • 50-agent council</small></div><div class="badge" id="healthBadge">Checking engine…</div></div>
+<div class="top"><div class="brand"><h1>⚽ Football Fact-First Research <span class="pill VERIFIED">v3.7</span></h1><small>Async research jobs • no long-request timeout • live Round 2+ progress • resilient JSON handling</small></div><div class="badge" id="healthBadge">Checking engine…</div></div>
 <div class="tabs"><button class="tab active" data-tab="session">Research Session</button><button class="tab" data-tab="postboard">POSTBOARD</button><button class="tab" data-tab="history">History</button><button class="tab" data-tab="settings">Setup</button></div>
 
 <section id="tab-session">
@@ -116,7 +116,7 @@ Leave blank for pure market discovery."></textarea></div>
 
 <section id="tab-settings" class="hidden">
 <div class="panel">
-<h2>Research engine setup <span class="pill VERIFIED">v3.6</span></h2><p class="tiny muted">v3.6 adds a live stage-by-stage tracker for every research round, including Round 2 and later. If you still see an older version after deploy, close the tab and reopen the Render URL.</p>
+<h2>Research engine setup <span class="pill VERIFIED">v3.7</span></h2><p class="tiny muted">v3.7 runs research asynchronously and keeps the live stage-by-stage tracker for every research round, including Round 2 and later. If you still see an older version after deploy, close the tab and reopen the Render URL.</p>
 <p>Add these Environment Variables in Render. Keep all keys on the server, never in the browser:</p>
 <ul>
 <li><code>API_FOOTBALL_KEY</code> — structured football facts, predictions and bookmaker odds.</li>
@@ -156,7 +156,7 @@ document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>{document.querySelect
 async function checkHealth(){
  const badge=document.getElementById("healthBadge"),box=document.getElementById("configStatus");
  try{
-   const r=await fetch("/api/health",{cache:"no-store"}),d=await r.json();
+   const r=await fetch("/api/health",{cache:"no-store"}),d=await readJsonResponse(r,"Setup check");
    const ok=d.tavilyConfigured&&d.geminiConfigured;
    badge.textContent=ok?"Verified engine ready":"Setup needed";
    badge.style.color=ok?"var(--good)":"var(--warn)";
@@ -168,7 +168,7 @@ async function checkHealth(){
 document.getElementById("refreshHealth").onclick=checkHealth;
 document.getElementById("providerTest").onclick=async()=>{
  const box=document.getElementById("providerStatus");box.classList.remove("hidden");box.className="status";box.textContent="Testing API-Football…";
- try{const r=await fetch("/api/provider-test",{cache:"no-store"}),d=await r.json();if(!r.ok)throw new Error(d.error||"Provider test failed");box.className="status good";box.textContent=`API-Football key works. Daily requests remaining: ${d.quota?.dailyRemaining??"unknown"} / ${d.quota?.dailyLimit??"unknown"}.`;}
+ try{const r=await fetch("/api/provider-test",{cache:"no-store"}),d=await readJsonResponse(r,"API-Football test");if(!r.ok)throw new Error(d.error||"Provider test failed");box.className="status good";box.textContent=`API-Football key works. Daily requests remaining: ${d.quota?.dailyRemaining??"unknown"} / ${d.quota?.dailyLimit??"unknown"}.`;}
  catch(e){box.className="status bad";box.textContent=e.message}
 };
 checkHealth();
@@ -193,7 +193,7 @@ async function discoverGames(autoRun=false){
  box.innerHTML="";
  try{
    const r=await fetch("/api/discover",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({days:Number(discoverDays.value),maxResults:Number(discoverCount.value)})});
-   const d=await r.json();if(!r.ok)throw new Error(d.error||"Discovery failed");
+   const d=await readJsonResponse(r,"Fixture discovery");if(!r.ok)throw new Error(d.error||"Discovery failed");
    status.className="status good";
    status.textContent=`Scanned ${d.scannedFixtures} upcoming fixtures across ${d.scannedLeagueSeasons} league-seasons. ${d.candidates.length} data-rich candidates survived.`;
    box.innerHTML=(d.candidates||[]).map((x,i)=>`<div class="discover-card">
@@ -218,6 +218,21 @@ document.getElementById("clearBtn").onclick=()=>{fixturesInput.value="";marketsI
 function parseLines(id){return document.getElementById(id).value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean)}
 
 
+
+async function readJsonResponse(response,label="Request"){
+  const text=await response.text();
+  const trimmed=String(text||"").trim();
+  if(!trimmed)throw new Error(`${label} returned an empty response.`);
+  if(/^<!doctype html/i.test(trimmed)||/^<html/i.test(trimmed)){
+    const status=response.status?`HTTP ${response.status}`:"";
+    throw new Error(`${label} returned an HTML error page instead of JSON (${status}). The server/proxy may have restarted or timed out. Please retry; the app will no longer treat this as football data.`);
+  }
+  try{return JSON.parse(trimmed)}
+  catch(err){
+    throw new Error(`${label} returned invalid JSON: ${err.message}`);
+  }
+}
+
 const researchPollers=new Map();
 
 function createProgressId(round){
@@ -239,7 +254,7 @@ async function pollResearchProgress(fixtureObj,progressId){
   try{
     const r=await fetch(`/api/research-progress/${encodeURIComponent(progressId)}`,{cache:"no-store"});
     if(!r.ok)return;
-    const p=await r.json();
+    const p=await readJsonResponse(r,"Progress tracker");
     fixtureObj.progress=p;
     if(activeSession){
       saveState();
@@ -305,21 +320,44 @@ async function researchFixture(fixtureObj,round){
  fixtureObj.progressId=progressId;
  fixtureObj.pendingRound=round;
  fixtureObj.progressStartedAt=new Date().toISOString();
- fixtureObj.progress={id:progressId,percent:2,stage:"Starting research round",stageNumber:1,totalStages:10,status:"running",message:`Round ${round}: preparing a fresh independent research cycle.`,startedAt:fixtureObj.progressStartedAt,logs:[]};
+ fixtureObj.progress={id:progressId,percent:1,stage:"Queued",stageNumber:1,totalStages:10,status:"running",message:`Round ${round}: sending the research job to the server…`,startedAt:fixtureObj.progressStartedAt,logs:[]};
  saveState();
  if(activeSession)renderSession(activeSession);
- startProgressPolling(fixtureObj,progressId);
- try{
-   const r=await fetch("/api/research",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-     fixture:fixtureObj.name,originalMarket:fixtureObj.originalMarket,round,
-     progressId,
+
+ const startResponse=await fetch("/api/research-start",{
+   method:"POST",headers:{"Content-Type":"application/json"},
+   body:JSON.stringify({
+     fixture:fixtureObj.name,originalMarket:fixtureObj.originalMarket,round,progressId,
      councilSize:Number(document.getElementById("councilSize")?.value||8),
      previousRounds:fixtureObj.rounds.map(x=>x.analysis)
-   })});
-   const d=await r.json();
-   if(!r.ok)throw new Error(d.error||"Research failed");
-   fixtureObj.progress={...(fixtureObj.progress||{}),percent:100,stage:"Complete",stageNumber:10,totalStages:10,status:"complete",message:`Round ${round} completed successfully.`,updatedAt:new Date().toISOString()};
-   return d;
+   })
+ });
+ const started=await readJsonResponse(startResponse,"Research start");
+ if(!startResponse.ok)throw new Error(started.error||"Could not start research.");
+
+ startProgressPolling(fixtureObj,progressId);
+
+ try{
+   const deadline=Date.now()+18*60*1000;
+   while(Date.now()<deadline){
+     await new Promise(r=>setTimeout(r,1250));
+     const rr=await fetch(`/api/research-result/${encodeURIComponent(progressId)}`,{cache:"no-store"});
+     const data=await readJsonResponse(rr,"Research result");
+     if(rr.status===202){
+       if(data.progress){
+         fixtureObj.progress=data.progress;
+         saveState();
+         if(activeSession)renderSession(activeSession);
+       }
+       continue;
+     }
+     if(!rr.ok||data.status==="error")throw new Error(data.error||"Research failed.");
+     if(data.status==="complete"&&data.result){
+       fixtureObj.progress={...(fixtureObj.progress||{}),percent:100,stage:"Complete",stageNumber:10,totalStages:10,status:"complete",message:`Round ${round} completed successfully.`,updatedAt:new Date().toISOString()};
+       return data.result;
+     }
+   }
+   throw new Error("The research job is still running after 18 minutes. Its progress may continue on the server; retry the result later or start a fresh round.");
  }finally{
    stopProgressPolling(progressId);
  }
@@ -623,7 +661,7 @@ async function expandCouncil(sessionId,index,addCount){
      fixture:f.name,targetSize:target,authenticityGate:round.authenticityGate,sources:round.sources||[],
      videoReview:round.videoReview||{},fallbackEvidence:round.fallbackEvidence||{},existingMembers:round.aiCouncil?.members||[]
    })});
-   const d=await r.json();if(!r.ok)throw new Error(d.error||"Council expansion failed");
+   const d=await readJsonResponse(r,"AI Council expansion");if(!r.ok)throw new Error(d.error||"Council expansion failed");
    round.aiCouncil=d.aiCouncil;f.status="done";
  }catch(e){f.status="done";alert(e.message)}
  saveState();renderSession(s);
@@ -632,7 +670,7 @@ async function refreshProviderBoard(){
  const box=document.getElementById("providerBoard");
  box.innerHTML='<div class="chart-title">🔌 Provider & Quota Board</div><p class="tiny">Loading…</p>';
  try{
-   const r=await fetch("/api/provider-status",{cache:"no-store"}),d=await r.json(),cfg=d.configured||{},u=d.usage||{};
+   const r=await fetch("/api/provider-status",{cache:"no-store"}),d=await readJsonResponse(r,"Provider status"),cfg=d.configured||{},u=d.usage||{};
    const rows=[["API-Football",cfg.apiFootball,u.apiFootball],["Tavily",cfg.tavily,u.tavily],["football-data.org",cfg.footballDataOrg,u.footballDataOrg],["TheSportsDB",cfg.theSportsDB,u.theSportsDB],["ScoreBat",cfg.scoreBat,u.scoreBat],["Gemini",cfg.gemini,u.gemini],["Groq",cfg.groq,u.groq],["Cloudflare",cfg.cloudflare,u.cloudflare],["OpenRouter",cfg.openrouter,u.openrouter]];
    box.innerHTML=`<div class="chart-title">🔌 Provider & Quota Board</div><div class="coverage">${rows.map(([name,on,x])=>`<div class="cov ${on?"complete":"partial"}"><strong>${esc(name)}</strong><br><span class="tiny">${on?"configured":"not configured"} • calls ${esc(x?.calls??0)} • success ${esc(x?.success??0)} • fail ${esc(x?.fail??0)}</span>${x?.lastQuota?.dailyRemaining!=null?`<br><span class="tiny muted">Daily remaining ${esc(x.lastQuota.dailyRemaining)} / ${esc(x.lastQuota.dailyLimit||"—")}</span>`:""}${x?.lastError?`<br><span class="tiny" style="color:var(--warn)">${esc(x.lastError)}</span>`:""}</div>`).join("")}</div><p class="tiny muted">OpenRouter zero-price models visible: ${esc(d.openRouterFreeModelsCount??0)}. These counters reset when the free Render instance restarts.</p>`;
  }catch(e){box.innerHTML=`<div class="chart-title">🔌 Provider & Quota Board</div><div class="status bad">${esc(e.message)}</div>`}
