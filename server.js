@@ -333,20 +333,106 @@ async function currentSquad(teamId,{force=false}={}){
     checkedAt:result.fetchedAt
   };
 }
-async function findUpcomingFixture(homeId,awayId,{force=false}={}){
-  // Free API-Football accounts cannot use the "next" parameter.
-  // Use a forward date window instead.
-  const from=zambiaDate(-1);
-  const to=zambiaDate(90);
-  const result=await apiFootball("/fixtures",{
-    team:homeId,from,to,timezone:"Africa/Lusaka"
-  },{cacheMs:10*60e3,force});
-  const matches=(result.data.response||[]);
-  const exact=matches.find(x=>{
-    const h=x.teams?.home?.id, a=x.teams?.away?.id;
+function futureFixtureRank(match){
+  const ts=Number(match?.fixture?.timestamp||0)*1000 || Date.parse(match?.fixture?.date||"");
+  if(!Number.isFinite(ts))return Number.MAX_SAFE_INTEGER;
+  return Math.abs(ts-Date.now());
+}
+async function fixtureByExactDate(homeId,awayId,date,{force=false}={}){
+  if(!date)return {match:null,quota:null,checkedAt:isoNow(),method:"date-fallback"};
+  const r=await apiFootball("/fixtures",{date,timezone:"Africa/Lusaka"},{cacheMs:5*60e3,force});
+  const rows=(r.data.response||[]);
+  const exact=rows.find(x=>{
+    const h=x.teams?.home?.id,a=x.teams?.away?.id;
     return (h===homeId&&a===awayId)||(h===awayId&&a===homeId);
-  });
-  return {match:exact||null,quota:result.quota,checkedAt:result.fetchedAt,lookup:{method:"date-window",from,to,count:matches.length}};
+  })||null;
+  return {match:exact,quota:r.quota,checkedAt:r.fetchedAt,method:"date-fallback"};
+}
+function parseWebDateCandidates(text){
+  const s=String(text||"");
+  const out=[];
+  const push=(y,m,d)=>{
+    const dt=new Date(Date.UTC(Number(y),Number(m)-1,Number(d),12,0,0));
+    if(Number.isFinite(dt.getTime()))out.push(dt.toISOString().slice(0,10));
+  };
+  for(const m of s.matchAll(/\b(20\d{2})[-\/](\d{1,2})[-\/](\d{1,2})\b/g))push(m[1],m[2],m[3]);
+  for(const m of s.matchAll(/\b(\d{1,2})[\/.-](\d{1,2})[\/.-](20\d{2})\b/g))push(m[3],m[2],m[1]);
+  const months={jan:1,january:1,feb:2,february:2,mar:3,march:3,apr:4,april:4,may:5,jun:6,june:6,jul:7,july:7,aug:8,august:8,sep:9,sept:9,september:9,oct:10,october:10,nov:11,november:11,dec:12,december:12};
+  for(const m of s.matchAll(/\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+(\d{1,2}),?\s+(20\d{2})\b/gi)){
+    push(m[3],months[m[1].toLowerCase()],m[2]);
+  }
+  for(const m of s.matchAll(/\b(\d{1,2})\s+(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+(20\d{2})\b/gi)){
+    push(m[3],months[m[2].toLowerCase()],m[1]);
+  }
+  return [...new Set(out)];
+}
+async function locateFixtureDateFromWeb(fixtureText){
+  try{
+    const rows=await tavilySearch(`${fixtureText} exact fixture date kickoff time 2026`);
+    const today=Date.parse(zambiaDate(-1)+"T00:00:00Z");
+    const max=Date.parse(zambiaDate(120)+"T23:59:59Z");
+    const found=[];
+    for(const r of rows){
+      const candidates=parseWebDateCandidates(`${r.title||""} ${r.content||""} ${r.url||""}`);
+      for(const date of candidates){
+        const ts=Date.parse(date+"T12:00:00Z");
+        if(ts>=today&&ts<=max)found.push({date,url:r.url||"",title:r.title||""});
+      }
+    }
+    found.sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+    return found[0]||null;
+  }catch{
+    return null;
+  }
+}
+async function findUpcomingFixture(homeId,awayId,{force=false,fixtureText=""}={}){
+  const from=zambiaDate(-1);
+  const to=zambiaDate(120);
+  let quota=null,checkedAt=isoNow(),errors=[];
+
+  // Official API-Football docs state that h2h is the only required parameter
+  // for /fixtures/headtohead; from/to can refine the date window.
+  try{
+    const r=await apiFootball("/fixtures/headtohead",{
+      h2h:`${homeId}-${awayId}`,from,to
+    },{cacheMs:10*60e3,force});
+    quota=r.quota;checkedAt=r.fetchedAt;
+    const rows=(r.data.response||[]).filter(x=>{
+      const h=x.teams?.home?.id,a=x.teams?.away?.id;
+      return (h===homeId&&a===awayId)||(h===awayId&&a===homeId);
+    });
+    rows.sort((a,b)=>futureFixtureRank(a)-futureFixtureRank(b));
+    const exact=rows.find(x=>{
+      const ts=Number(x?.fixture?.timestamp||0)*1000 || Date.parse(x?.fixture?.date||"");
+      return Number.isFinite(ts)&&ts>=Date.now()-6*60*60*1000;
+    })||rows[0]||null;
+    if(exact){
+      return {match:exact,quota,checkedAt,lookup:{method:"headtohead",from,to,count:rows.length},errors};
+    }
+  }catch(err){
+    errors.push(`headtohead: ${String(err?.message||err)}`);
+  }
+
+  // Second path: find a likely exact date from fresh web results, then use /fixtures?date=YYYY-MM-DD.
+  if(fixtureText){
+    const webDate=await locateFixtureDateFromWeb(fixtureText);
+    if(webDate?.date){
+      try{
+        const d=await fixtureByExactDate(homeId,awayId,webDate.date,{force:true});
+        if(d.match){
+          return {
+            match:d.match,quota:d.quota||quota,checkedAt:d.checkedAt,
+            lookup:{method:"web-date + fixtures-date",date:webDate.date,source:webDate.url||""},
+            errors
+          };
+        }
+      }catch(err){
+        errors.push(`date-fallback: ${String(err?.message||err)}`);
+      }
+    }
+  }
+
+  return {match:null,quota,checkedAt,lookup:{method:"headtohead+date-fallback",from,to},errors};
 }
 async function fixtureDetails(fixtureId,{force=false}={}){
   const result=await apiFootball("/fixtures",{id:fixtureId,timezone:"Africa/Lusaka"},{cacheMs:2*60e3,force});
@@ -456,13 +542,19 @@ async function buildAuthenticityGate(fixtureText,round){
 
   const homeSquad=await currentSquad(home.best.id,{force});
   const awaySquad=await currentSquad(away.best.id,{force});
-  const candidate=await findUpcomingFixture(home.best.id,away.best.id,{force});
+  let candidate;
+  try{
+    candidate=await findUpcomingFixture(home.best.id,away.best.id,{force,fixtureText});
+  }catch(err){
+    candidate={match:null,quota:null,checkedAt:isoNow(),errors:[String(err?.message||err)]};
+  }
   let details=null, injuries={rows:[]}, transfers=[];
   if(candidate.match){
     details=await fixtureDetails(candidate.match.fixture.id,{force:true});
     injuries=await fixtureInjuries(candidate.match.fixture.id,{force:true});
   }else{
-    warnings.push("API-Football did not find this matchup in the next 90-day fixture window.");
+    warnings.push("Exact fixture verification did not complete through API-Football head-to-head/date lookup.");
+    for(const e of (candidate.errors||[]).slice(0,2))warnings.push(`Fixture lookup detail: ${e}`);
   }
   // A fresh Relearn round adds transfer activity so stale squad/player claims get another check.
   if(round>1){
@@ -2118,12 +2210,12 @@ Do not add markdown or commentary outside the JSON.`;
 
 app.get("/api/version",(req,res)=>{
   res.setHeader("Cache-Control","no-store");
-  res.json({ok:true,version:"4.0.0",protocol:"async-research-v2"});
+  res.json({ok:true,version:"4.1.0",protocol:"async-research-v2"});
 });
 
 app.get("/api/health",(req,res)=>{
   res.json({
-    ok:true,version:"4.0.0",
+    ok:true,version:"4.1.0",
     tavilyConfigured:Boolean(process.env.TAVILY_API_KEY),
     geminiConfigured:Boolean(process.env.GEMINI_API_KEY),
     apiFootballConfigured:Boolean(process.env.API_FOOTBALL_KEY),
@@ -2396,4 +2488,4 @@ app.use((req,res)=>{
   res.setHeader("Cache-Control","no-cache, no-store, must-revalidate");
   res.sendFile(path.join(__dirname,"public","index.html"));
 });
-app.listen(PORT,()=>console.log(`Football Fact-First Research v4.0 running on port ${PORT}`));
+app.listen(PORT,()=>console.log(`Football Fact-First Research v4.1 running on port ${PORT}`));

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#071923">
-<title>Football Fact-First Research v4.0</title>
+<title>Football Fact-First Research v4.1</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon-192.png">
 <style>
@@ -49,7 +49,7 @@
 </head>
 <body>
 <div class="app">
-<div class="top"><div class="brand"><h1>⚽ Football Fact-First Research <span class="pill VERIFIED">v4.0</span></h1><small>Bookmaker-name resolver • free-tier fixture verification • video fallback • integrity guard</small></div><div class="badge" id="healthBadge">Checking engine…</div></div>
+<div class="top"><div class="brand"><h1>⚽ Football Fact-First Research <span class="pill VERIFIED">v4.1</span></h1><small>Head-to-head fixture verification • bookmaker-name resolver • clear NOT RUN states • async research</small></div><div class="badge" id="healthBadge">Checking engine…</div></div>
 <div class="tabs"><button class="tab active" data-tab="session">Research Session</button><button class="tab" data-tab="postboard">POSTBOARD</button><button class="tab" data-tab="history">History</button><button class="tab" data-tab="settings">Setup</button></div>
 
 <section id="tab-session">
@@ -116,7 +116,7 @@ Leave blank for pure market discovery."></textarea></div>
 
 <section id="tab-settings" class="hidden">
 <div class="panel">
-<h2>Research engine setup <span class="pill VERIFIED">v4.0</span></h2><p class="tiny muted">v4.0 resolves bookmaker-style club names before fixture verification and keeps the live stage-by-stage tracker for every research round, including Round 2 and later. If you still see an older version after deploy, close the tab and reopen the Render URL.</p>
+<h2>Research engine setup <span class="pill VERIFIED">v4.1</span></h2><p class="tiny muted">v4.0 resolves bookmaker-style club names before fixture verification and keeps the live stage-by-stage tracker for every research round, including Round 2 and later. If you still see an older version after deploy, close the tab and reopen the Render URL.</p>
 <p>Add these Environment Variables in Render. Keep all keys on the server, never in the browser:</p>
 <ul>
 <li><code>API_FOOTBALL_KEY</code> — structured football facts, predictions and bookmaker odds.</li>
@@ -144,7 +144,7 @@ Leave blank for pure market discovery."></textarea></div>
 </div>
 
 <script>
-const APP_VERSION="4.0.0";
+const APP_VERSION="4.1.0";
 const KEY="footballFactFirstResearch_v2";
 let state=loadState();let activeSession=null;
 function loadState(){try{return JSON.parse(localStorage.getItem(KEY))||{sessions:[]}}catch{return{sessions:[]}}}
@@ -566,7 +566,15 @@ function temporalGuardHtml(round){
 
 function councilHtml(round){
  const c=round.aiCouncil||{},agg=c.aggregation||{},members=c.members||[],counts=c.counts||{};
- const conv=agg.convergence||"NONE",cls=conv==="HIGH"?"VERIFIED":(conv==="MEDIUM"||conv==="LOW")?"CAUTION":"FAILED";
+ const conv=agg.convergence||"NONE";
+ if(conv==="BLOCKED"){
+   return `<div class="chartbox">
+     <div class="fixture-head"><div><div class="chart-title">🧠 Independent AI Council</div><span class="tiny muted">Same evidence pack • bookmaker odds hidden</span></div><span class="pill CAUTION">NOT RUN</span></div>
+     <div class="status warn"><strong>AI COUNCIL — NOT RUN</strong><br>${esc(agg.note||"Fixture verification is required before council analysis.")}</div>
+     <p class="tiny muted">Agent seats 0 • Available 0 • Unique models 0 • Specialist agents 0</p>
+   </div>`;
+ }
+ const cls=conv==="HIGH"?"VERIFIED":(conv==="MEDIUM"||conv==="LOW")?"CAUTION":"FAILED";
  return `<div class="chartbox">
  <div class="fixture-head"><div><div class="chart-title">🧠 Independent AI Council</div><span class="tiny muted">Same evidence pack • bookmaker odds hidden</span></div><span class="pill ${cls}">${esc(conv)} CONVERGENCE</span></div>
  <p><strong>${conv==="INSUFFICIENT"?"Council status":"Council consensus"}:</strong> <span style="color:var(--gold)">${esc(agg.consensusMarket||"NO CONSENSUS")}</span>${agg.medianFairProbabilityPct!=null?` • median fair ${esc(Math.round(agg.medianFairProbabilityPct*10)/10)}%`:""}</p>${agg.leadingSingleModelMarket?`<p class="tiny"><strong>Single-model opinion only:</strong> ${esc(agg.leadingSingleModelMarket)}</p>`:""}
@@ -577,6 +585,15 @@ function councilHtml(round){
 }
 function externalBenchmarksHtml(round){
  const b=round.externalBenchmarks||{},api=b.apiFootball||{},sites=b.websites||[],cons=b.consensus||{};
+ if(cons.status==="BLOCKED"){
+   return `<div class="chartbox">
+     <div class="fixture-head">
+       <div><div class="chart-title">🌐 External Prediction Benchmarks — ACTUAL PREDICTIONS</div><span class="tiny muted">Exact/current fixture only • unrelated old links suppressed</span></div>
+       <span class="pill CAUTION">NOT RUN</span>
+     </div>
+     <div class="status warn"><strong>EXTERNAL BENCHMARKS — NOT RUN</strong><br>${esc(b.rule||"Fixture verification is required before external prediction comparison.")}</div>
+   </div>`;
+ }
  return `<div class="chartbox">
    <div class="fixture-head">
      <div><div class="chart-title">🌐 External Prediction Benchmarks — ACTUAL PREDICTIONS</div>

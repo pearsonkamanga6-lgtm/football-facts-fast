@@ -1,4 +1,4 @@
-# Football Fact-First Research v4.0 — Bookmaker Team-Name Resolver
+# Football Fact-First Research v4.1 — Head-to-Head Fixture Verification
 
 
 This version is designed specifically to prevent stale-player mistakes such as describing a footballer as being at an old club after a transfer.
@@ -450,3 +450,23 @@ v4.0:
 - displays the exact name variants tried when resolution is weak.
 
 This is designed to reduce false FAILED authenticity gates without weakening the fixture-ID check.
+
+
+## v4.1 — root-cause fix for repeated fixture-verification errors
+
+The `Season field is required` error came from using `/fixtures` with a team/date-window combination
+that API-Football was rejecting for this account. v4.1 no longer uses that route for exact matchup verification.
+
+New verification order:
+1. Resolve both team IDs.
+2. Call `/fixtures/headtohead?h2h=HOME_ID-AWAY_ID&from=...&to=...`.
+   API-Football's current official guide says `h2h` is the only required parameter for this endpoint,
+   while `from` and `to` can narrow the date window.
+3. If no upcoming matchup is found, search the fresh web for the exact fixture date.
+4. Use `/fixtures?date=YYYY-MM-DD` and match the two resolved team IDs.
+5. If a provider errors, retain the resolved teams/squads and show the lookup detail rather than throwing away the whole authenticity gate.
+
+UI wording is also corrected:
+- `BLOCKED CONVERGENCE` becomes `AI COUNCIL — NOT RUN`.
+- `BLOCKED BENCHMARK CONSENSUS` becomes `EXTERNAL BENCHMARKS — NOT RUN`.
+These are not disagreements; they are stages deliberately skipped until the fixture is verified.
