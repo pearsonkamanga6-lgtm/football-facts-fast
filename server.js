@@ -307,13 +307,19 @@ async function currentSquad(teamId,{force=false}={}){
   };
 }
 async function findUpcomingFixture(homeId,awayId,{force=false}={}){
-  const result=await apiFootball("/fixtures",{team:homeId,next:20,timezone:"Africa/Lusaka"},{cacheMs:10*60e3,force});
+  // Free API-Football accounts cannot use the "next" parameter.
+  // Use a forward date window instead.
+  const from=zambiaDate(-1);
+  const to=zambiaDate(90);
+  const result=await apiFootball("/fixtures",{
+    team:homeId,from,to,timezone:"Africa/Lusaka"
+  },{cacheMs:10*60e3,force});
   const matches=(result.data.response||[]);
   const exact=matches.find(x=>{
     const h=x.teams?.home?.id, a=x.teams?.away?.id;
     return (h===homeId&&a===awayId)||(h===awayId&&a===homeId);
   });
-  return {match:exact||null, quota:result.quota, checkedAt:result.fetchedAt};
+  return {match:exact||null,quota:result.quota,checkedAt:result.fetchedAt,lookup:{method:"date-window",from,to,count:matches.length}};
 }
 async function fixtureDetails(fixtureId,{force=false}={}){
   const result=await apiFootball("/fixtures",{id:fixtureId,timezone:"Africa/Lusaka"},{cacheMs:2*60e3,force});
@@ -417,7 +423,7 @@ async function buildAuthenticityGate(fixtureText,round){
     details=await fixtureDetails(candidate.match.fixture.id,{force:true});
     injuries=await fixtureInjuries(candidate.match.fixture.id,{force:true});
   }else{
-    warnings.push("API-Football did not find this matchup among the home team's next 20 fixtures.");
+    warnings.push("API-Football did not find this matchup in the next 90-day fixture window.");
   }
   // A fresh Relearn round adds transfer activity so stale squad/player claims get another check.
   if(round>1){
@@ -1029,11 +1035,13 @@ function chooseVideoCandidates(videoScout, gate){
 
 async function reviewYoutubeHighlights(videos, gate){
   if(!videos.length){
-    return {status:"UNAVAILABLE", reviewedAt:isoNow(), videos:[], summary:"No public YouTube highlight links were found by the scouting searches.", observations:[]};
+    return {status:"UNAVAILABLE",reviewedAt:isoNow(),videos:[],summary:"No public YouTube highlight links were found by the scouting searches.",observations:[]};
   }
   const key=requireEnv("GEMINI_API_KEY");
-  const model=process.env.GEMINI_MODEL||"gemini-3.8-flash";
-  const { GoogleGenAI } = await import("@google/genai");
+  const preferred=process.env.GEMINI_VIDEO_MODEL||process.env.GEMINI_MODEL||"gemini-3.8-flash";
+  const models=[preferred,"gemini-3.7-flash","gemini-3.6-flash","gemini-3.5-flash-lite"]
+    .filter((x,i,a)=>x&&a.indexOf(x)===i);
+  const { GoogleGenAI }=await import("@google/genai");
   const ai=new GoogleGenAI({apiKey:key});
 
   const prompt=`You are reviewing PUBLIC FOOTBALL HIGHLIGHT VIDEOS from the teams’ RECENT PRIOR MATCHES as supporting evidence for a pre-match scouting report. Do not use highlights from the target fixture after it has started or finished.
@@ -1058,41 +1066,39 @@ Do NOT use the video to identify a current player-club relationship if structure
 Return ONLY JSON:
 {
  "summary":"overall video evidence",
- "observations":[
-   {
-     "url":"exact supplied URL",
-     "teamOrMatch":"...",
-     "evidence":["..."],
-     "limitations":["..."],
-     "usefulness":"HIGH|MEDIUM|LOW"
-   }
- ],
+ "observations":[{"url":"exact supplied URL","teamOrMatch":"...","evidence":["..."],"limitations":["..."],"usefulness":"HIGH|MEDIUM|LOW"}],
  "crossVideoPatterns":["..."],
  "warning":"Highlights are selective evidence and not a full-match sample."
 }`;
 
   const input=[{type:"text",text:prompt},...videos.map(v=>({type:"video",uri:v.url}))];
-  try{
-    const interaction=await ai.interactions.create({model,input});
-    const out=String(interaction.output_text||interaction.outputText||"").trim();
-    const parsed=parseJsonObject(out,"Video model");
-    return {
-      status:"COMPLETE",
-      reviewedAt:isoNow(),
-      videos:videos.map(v=>({title:v.title,url:v.url,side:v.side||"general"})),
-      ...parsed
-    };
-  }catch(err){
-    return {
-      status:"PARTIAL",
-      reviewedAt:isoNow(),
-      videos:videos.map(v=>({title:v.title,url:v.url,side:v.side||"general"})),
-      summary:`Video links were found, but automated visual review could not complete: ${err.message}`,
-      observations:[],
-      crossVideoPatterns:[],
-      warning:"Do not treat linked highlights as reviewed footage unless status is COMPLETE."
-    };
+  const errors=[];
+
+  for(const model of models){
+    try{
+      const interaction=await ai.interactions.create({model,input});
+      const out=String(interaction.output_text||interaction.outputText||"").trim();
+      const parsed=parseJsonObject(out,`Video model ${model}`);
+      return {
+        status:"COMPLETE",reviewedAt:isoNow(),modelUsed:model,
+        videos:videos.map(v=>({title:v.title,url:v.url,side:v.side||"general"})),...parsed
+      };
+    }catch(err){
+      const msg=String(err?.message||err||"");
+      errors.push(`${model}: ${msg.slice(0,260)}`);
+      if(!/429|quota|rate|limit|model|unsupported|invalid_request|resource_exhausted/i.test(msg))break;
+      await sleep(900);
+    }
   }
+
+  return {
+    status:"PARTIAL",reviewedAt:isoNow(),
+    videos:videos.map(v=>({title:v.title,url:v.url,side:v.side||"general"})),
+    summary:"Video links were found, but no configured free Gemini video model completed the visual review.",
+    observations:[],crossVideoPatterns:[],
+    warning:"Do not treat linked highlights as reviewed footage unless status is COMPLETE.",
+    errors:errors.slice(-4)
+  };
 }
 
 function flattenScoutLinks(webScout=[],videoScout=[]){
@@ -2073,12 +2079,12 @@ Do not add markdown or commentary outside the JSON.`;
 
 app.get("/api/version",(req,res)=>{
   res.setHeader("Cache-Control","no-store");
-  res.json({ok:true,version:"3.8.0",protocol:"async-research-v2"});
+  res.json({ok:true,version:"3.9.0",protocol:"async-research-v2"});
 });
 
 app.get("/api/health",(req,res)=>{
   res.json({
-    ok:true,version:"3.8.0",
+    ok:true,version:"3.9.0",
     tavilyConfigured:Boolean(process.env.TAVILY_API_KEY),
     geminiConfigured:Boolean(process.env.GEMINI_API_KEY),
     apiFootballConfigured:Boolean(process.env.API_FOOTBALL_KEY),
@@ -2210,6 +2216,14 @@ async function executeResearchJob(body,progressId){
   setResearchProgress(progressId,{percent:59,stage:"Data analysis",stageNumber:6,totalStages:10,message:`Analyzing ${sources.length} deduplicated sources, structured evidence, contradictions and every realistic market family.`});
   const analysis=await geminiAnalyze({fixture,round,originalMarket,previousRounds,sources,gate,videoReview,fallbackEvidence,temporalGuard});
 
+  if(analysis.dataAnalysis && videoReview.status!=="COMPLETE"){
+    analysis.dataAnalysis.videoEvidenceScore=0;
+    analysis.missingData=Array.isArray(analysis.missingData)?analysis.missingData:[];
+    if(!analysis.missingData.some(x=>/video/i.test(String(x)))){
+      analysis.missingData.push("Automated visual video review did not complete; linked videos were not counted as reviewed evidence.");
+    }
+  }
+
   if(gate.status==="FAILED"){
     analysis.finalMarket="UNRESOLVED";
     analysis.classification="UNRESOLVED / HIGH RISK";
@@ -2221,6 +2235,9 @@ async function executeResearchJob(body,progressId){
     analysis.originalMarketComparison="";
     analysis.remainingDanger=temporalGuard.reason;
     analysis.shortlist=[];
+    if(analysis.dataAnalysis)analysis.dataAnalysis.marketScores=[];
+    analysis.marketScreen=[];
+    analysis.whyFinal=temporalGuard.reason;
   }
 
   setResearchProgress(progressId,{percent:70,stage:"AI Council",stageNumber:7,totalStages:10,message:temporalGuard.bettingAllowed?`Running the independent AI Council with up to ${councilSize} agent seat(s). Odds remain hidden.`:"Pre-match timing guard blocked the betting council; preserving the audit instead."});
@@ -2340,4 +2357,4 @@ app.use((req,res)=>{
   res.setHeader("Cache-Control","no-cache, no-store, must-revalidate");
   res.sendFile(path.join(__dirname,"public","index.html"));
 });
-app.listen(PORT,()=>console.log(`Football Fact-First Research v3.8 running on port ${PORT}`));
+app.listen(PORT,()=>console.log(`Football Fact-First Research v3.9 running on port ${PORT}`));

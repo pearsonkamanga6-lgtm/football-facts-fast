@@ -1,4 +1,4 @@
-# Football Fact-First Research v3.8 — Version Handshake
+# Football Fact-First Research v3.9 — Free-Tier Fixture Verification + Video Fallback
 
 
 This version is designed specifically to prevent stale-player mistakes such as describing a footballer as being at an old club after a transfer.
@@ -427,3 +427,10 @@ v3.8 fixes this:
   returning an async acceptance object that old clients can mistake for completed research.
 
 This prevents mixed-version deployments from silently producing zero-data reports.
+
+
+## v3.9 fixes
+- Replaced API-Football's free-plan-incompatible `next` fixture parameter with a 90-day `from`/`to` window.
+- Video review retries multiple Gemini Flash models when one hits quota/rate limits.
+- Unreviewed video links now score 0 for video evidence.
+- If the Pre-Match Integrity Guard blocks betting, candidate markets and market charts are hidden.

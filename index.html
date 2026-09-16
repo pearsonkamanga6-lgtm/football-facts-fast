@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#071923">
-<title>Football Fact-First Research v3.8</title>
+<title>Football Fact-First Research v3.9</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon-192.png">
 <style>
@@ -49,7 +49,7 @@
 </head>
 <body>
 <div class="app">
-<div class="top"><div class="brand"><h1>⚽ Football Fact-First Research <span class="pill VERIFIED">v3.8</span></h1><small>Version handshake • async research jobs • live Round 2+ progress • no mixed-version empty reports</small></div><div class="badge" id="healthBadge">Checking engine…</div></div>
+<div class="top"><div class="brand"><h1>⚽ Football Fact-First Research <span class="pill VERIFIED">v3.9</span></h1><small>Free-tier fixture verification • video quota fallback • integrity-guarded market display • async research</small></div><div class="badge" id="healthBadge">Checking engine…</div></div>
 <div class="tabs"><button class="tab active" data-tab="session">Research Session</button><button class="tab" data-tab="postboard">POSTBOARD</button><button class="tab" data-tab="history">History</button><button class="tab" data-tab="settings">Setup</button></div>
 
 <section id="tab-session">
@@ -116,7 +116,7 @@ Leave blank for pure market discovery."></textarea></div>
 
 <section id="tab-settings" class="hidden">
 <div class="panel">
-<h2>Research engine setup <span class="pill VERIFIED">v3.8</span></h2><p class="tiny muted">v3.8 verifies browser/server version compatibility and keeps the live stage-by-stage tracker for every research round, including Round 2 and later. If you still see an older version after deploy, close the tab and reopen the Render URL.</p>
+<h2>Research engine setup <span class="pill VERIFIED">v3.9</span></h2><p class="tiny muted">v3.9 fixes free-tier fixture verification and keeps the live stage-by-stage tracker for every research round, including Round 2 and later. If you still see an older version after deploy, close the tab and reopen the Render URL.</p>
 <p>Add these Environment Variables in Render. Keep all keys on the server, never in the browser:</p>
 <ul>
 <li><code>API_FOOTBALL_KEY</code> — structured football facts, predictions and bookmaker odds.</li>
@@ -144,7 +144,7 @@ Leave blank for pure market discovery."></textarea></div>
 </div>
 
 <script>
-const APP_VERSION="3.8.0";
+const APP_VERSION="3.9.0";
 const KEY="footballFactFirstResearch_v2";
 let state=loadState();let activeSession=null;
 function loadState(){try{return JSON.parse(localStorage.getItem(KEY))||{sessions:[]}}catch{return{sessions:[]}}}
@@ -334,9 +334,12 @@ async function runSession(session){
  prog.firstElementChild.style.width="100%";
   const failed=session.fixtures.filter(x=>x.status==="error").length;
   status.className="status "+(failed?"warn":"good");
+  const blocked=session.fixtures.filter(x=>x.rounds?.at(-1)?.temporalGuard?.bettingAllowed===false).length;
   status.textContent=failed
     ? `Research finished with ${failed} fixture error${failed===1?"":"s"}. Successful fixtures remain saved; retry the failed fixture.`
-    : "Research complete: collected → analyzed → AI Council cross-checked → presented on POSTBOARD.";
+    : blocked
+      ? `Research complete, but ${blocked} fixture${blocked===1?" was":"s were"} blocked from betting conclusions by the Pre-Match Integrity Guard.`
+      : "Research complete: collected → analyzed → AI Council cross-checked → presented on POSTBOARD.";
   btn.disabled=false
 }
 async function researchFixture(fixtureObj,round){
@@ -449,6 +452,8 @@ function videoReviewHtml(round){
    ${(v.videos||[]).length?`<div>${v.videos.map((x,i)=>`<a class="source" href="${esc(x.url)}" target="_blank" rel="noopener">Video ${i+1}: ${esc(x.title||x.url)}</a>`).join("")}</div>`:""}
    ${(v.observations||[]).length?`<details open><summary>What the footage showed</summary>${v.observations.map(o=>`<div class="auth-item" style="margin-top:7px"><strong>${esc(o.teamOrMatch||"Video")}</strong><br><span class="tiny">${esc((o.evidence||[]).join(" • "))}</span><br><span class="tiny muted">Limitations: ${esc((o.limitations||[]).join(" • "))}</span></div>`).join("")}</details>`:""}
    ${(v.crossVideoPatterns||[]).length?`<p class="tiny"><strong>Patterns repeated across videos:</strong> ${esc(v.crossVideoPatterns.join(" • "))}</p>`:""}
+   ${(v.errors||[]).length?`<details><summary>Video-review provider attempts</summary>${v.errors.map(x=>`<div class="tiny muted">${esc(x)}</div>`).join("")}</details>`:""}
+   ${v.modelUsed?`<p class="tiny muted">Visual-review model used: ${esc(v.modelUsed)}</p>`:""}
    <p class="tiny muted"><strong>Important:</strong> ${esc(v.warning||"Highlights are selective evidence and are not a full-match sample.")}</p>
  </div>`;
 }
@@ -607,16 +612,16 @@ function externalBenchmarksHtml(round){
 }
 
 function analysisHtml(round){
- const a=round.analysis||{},ck=classKey(a.classification);
+ const a=round.analysis||{},ck=classKey(a.classification),blocked=round.temporalGuard&&round.temporalGuard.bettingAllowed===false;
  return `${researchStagesHtml(round)}
  ${temporalGuardHtml(round)}
  ${authHtml(round)}
  ${videoReviewHtml(round)}
  ${evidenceQualityHtml(a)}
- ${marketChartHtml(a)}
+ ${blocked?`<div class="status warn"><strong>Betting-market presentation withheld.</strong> Evidence was gathered and analyzed, but candidate betting markets stay hidden until the exact fixture time/status is verified.</div>`:marketChartHtml(a)}
  ${coverageDonutHtml(a)}
  ${councilHtml(round)}
- <details open><summary>Complete Market-Family Screen</summary>${marketScreenHtml(a.marketScreen||[])}</details>
+ ${blocked?"":`<details open><summary>Complete Market-Family Screen</summary>${marketScreenHtml(a.marketScreen||[])}</details>`}
  <div class="market">${esc(a.finalMarket||"No final market")}</div><span class="pill ${esc(ck)}">${esc(a.classification||"")}</span>
  <p>${esc(a.whyFinal||"")}</p><p class="tiny"><strong>Remaining danger:</strong> ${esc(a.remainingDanger||"")}</p>
  ${a.freshness?`<p class="tiny"><strong>Freshness:</strong> ${esc(a.freshness.freshnessNote||"")} ${a.freshness.fixtureDate?`• Fixture ${esc(a.freshness.fixtureDate)}`:""}</p>`:""}
@@ -624,7 +629,7 @@ function analysisHtml(round){
  ${externalBenchmarksHtml(round)}
  ${valueAuditHtml(round)}
  <details open><summary>Stale-data audit</summary>${staleHtml(a.staleClaimsRejected||[])}${(a.verifiedCurrentPlayersReferenced||[]).length?`<p class="tiny"><strong>Current players referenced:</strong> ${esc(a.verifiedCurrentPlayersReferenced.join(", "))}</p>`:""}</details>
- <details><summary>Candidate markets & kill test</summary><ol>${shortlistHtml(a.shortlist||[])}</ol></details>
+ ${blocked?"":`<details><summary>Candidate markets & kill test</summary><ol>${shortlistHtml(a.shortlist||[])}</ol></details>`}
  <details><summary>Match profile</summary>${Object.entries(a.matchProfile||{}).map(([k,v])=>`<p class="tiny"><strong>${esc(k)}:</strong> ${esc(v)}</p>`).join("")}</details>
  <details><summary>Data coverage checkpoint</summary>${coverageHtml(a.dataCoverage||[])}</details>
  <details><summary>Missing data / anti-bias</summary><p class="tiny"><strong>Missing:</strong> ${esc((a.missingData||[]).join(" • "))}</p><p class="tiny"><strong>Anti-bias:</strong> ${esc(a.antiBiasCheck||"")}</p><p class="tiny"><strong>Convergence:</strong> ${esc(a.roundConvergence||"")}</p></details>
