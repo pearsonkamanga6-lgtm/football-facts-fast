@@ -1,0 +1,1384 @@
+const express = require("express");
+const path = require("path");
+
+const app = express();
+const PORT = process.env.PORT || 10000;
+const API_FOOTBALL_BASE = "https://v3.football.api-sports.io";
+
+app.use(express.json({ limit: "3mb" }));
+app.use(express.static(path.join(__dirname, "public"), { etag: true, maxAge: "10m" }));
+
+const CHECKLIST = [
+  "fixture_verification",
+  "current_squads_authenticity",
+  "confirmed_lineups",
+  "injuries_suspensions",
+  "recent_transfers",
+  "rest_rotation_motivation",
+  "last5_last10_form",
+  "goals_xg_chance_quality",
+  "shots_sot_possession",
+  "corners_width_crossing_setpieces",
+  "cards_referee",
+  "opponent_strength_adjustment",
+  "tactical_matchup_game_states",
+  "h2h_venue_weather",
+  "video_evidence"
+];
+
+const cache = new Map();
+let apiFootballQueue = Promise.resolve();
+let lastApiFootballCall = 0;
+
+// Free API-Football accounts are rate-limited. Serialize calls and keep spacing
+// conservative so a research request does not hammer the provider.
+async function apiFootballThrottle(){
+  const minGapMs = Number(process.env.API_FOOTBALL_MIN_GAP_MS || 6200);
+  const now = Date.now();
+  const wait = Math.max(0, minGapMs - (now - lastApiFootballCall));
+  if(wait) await new Promise(r => setTimeout(r, wait));
+  lastApiFootballCall = Date.now();
+}
+function queuedApiFootball(fn){
+  apiFootballQueue = apiFootballQueue.then(async () => {
+    await apiFootballThrottle();
+    return fn();
+  }, async () => {
+    await apiFootballThrottle();
+    return fn();
+  });
+  return apiFootballQueue;
+}
+
+function requireEnv(name){
+  const value = process.env[name];
+  if(!value) {
+    const err = new Error(`${name} is not configured on the server.`);
+    err.status = 503;
+    throw err;
+  }
+  return value;
+}
+function cleanFixture(f){
+  return String(f || "").replace(/\s+/g, " ").trim().slice(0, 200);
+}
+function parseFixtureTeams(raw){
+  const s = cleanFixture(raw);
+  const separators = [
+    /\s+vs\.?\s+/i,
+    /\s+v\s+/i,
+    /\s+\|\s+/,
+    /\s+—\s+/,
+    /\s+–\s+/,
+    /\s+-\s+/
+  ];
+  for(const rx of separators){
+    const parts = s.split(rx).map(x=>x.trim()).filter(Boolean);
+    if(parts.length === 2) return {home:parts[0], away:parts[1]};
+  }
+  return null;
+}
+function normalizeTeamName(s){
+  return String(s||"")
+    .toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g,"")
+    .replace(/&/g," and ")
+    .replace(/[^a-z0-9]+/g," ")
+    .replace(/\b(fc|cf|afc|ac|sc|ssd|fk|fk|calcio|football club)\b/g," ")
+    .replace(/\s+/g," ").trim();
+}
+function teamSimilarity(a,b){
+  const x=normalizeTeamName(a), y=normalizeTeamName(b);
+  if(!x||!y) return 0;
+  if(x===y) return 1;
+  if(x.includes(y)||y.includes(x)) return 0.88;
+  const A=new Set(x.split(" ")), B=new Set(y.split(" "));
+  let inter=0; for(const t of A) if(B.has(t)) inter++;
+  const union=new Set([...A,...B]).size || 1;
+  const j=inter/union;
+  const prefix=(x[0]===y[0])?0.04:0;
+  return Math.min(0.95,j+prefix);
+}
+function isoNow(){ return new Date().toISOString(); }
+function getCached(key, maxAgeMs){
+  const v=cache.get(key);
+  if(v && Date.now()-v.at < maxAgeMs) return v.value;
+  return null;
+}
+function setCached(key,value){ cache.set(key,{at:Date.now(),value}); return value; }
+
+async function apiFootball(endpoint, params={}, {cacheMs=0, force=false}={}){
+  const key = requireEnv("API_FOOTBALL_KEY");
+  const qs = new URLSearchParams();
+  Object.entries(params).forEach(([k,v])=>{ if(v!==undefined && v!==null && v!=="") qs.set(k,String(v)); });
+  const cacheKey = `api-football:${endpoint}?${qs}`;
+  if(!force && cacheMs){
+    const hit=getCached(cacheKey,cacheMs);
+    if(hit) return hit;
+  }
+  const value = await queuedApiFootball(async()=>{
+    const response = await fetch(`${API_FOOTBALL_BASE}${endpoint}?${qs}`, {
+      headers: {"x-apisports-key": key}
+    });
+    const raw = await response.text();
+    if(!response.ok) throw new Error(`API-Football failed (${response.status}): ${raw.slice(0,260)}`);
+    let data;
+    try{ data=JSON.parse(raw); }catch{ throw new Error("API-Football returned invalid JSON."); }
+    const apiErrors=data.errors && (Array.isArray(data.errors)?data.errors.length:Object.keys(data.errors).length);
+    if(apiErrors) throw new Error(`API-Football error: ${JSON.stringify(data.errors).slice(0,320)}`);
+    return {
+      data,
+      quota:{
+        dailyRemaining: response.headers.get("x-ratelimit-requests-remaining"),
+        dailyLimit: response.headers.get("x-ratelimit-requests-limit"),
+        minuteRemaining: response.headers.get("x-ratelimit-remaining"),
+        minuteLimit: response.headers.get("x-ratelimit-limit")
+      },
+      fetchedAt: isoNow()
+    };
+  });
+  return cacheMs ? setCached(cacheKey,value) : value;
+}
+
+async function resolveTeam(requested,{force=false}={}){
+  const result=await apiFootball("/teams",{search:requested},{cacheMs:24*3600e3,force});
+  const candidates=(result.data.response||[]).map(x=>({
+    id:x.team?.id,
+    name:x.team?.name||"",
+    country:x.team?.country||"",
+    logo:x.team?.logo||"",
+    score:teamSimilarity(requested,x.team?.name||"")
+  })).filter(x=>x.id).sort((a,b)=>b.score-a.score);
+  const best=candidates[0]||null;
+  return {
+    requested,
+    best,
+    alternatives:candidates.slice(1,4),
+    confidence:best?best.score:0,
+    quota:result.quota,
+    checkedAt:result.fetchedAt
+  };
+}
+async function currentSquad(teamId,{force=false}={}){
+  const result=await apiFootball("/players/squads",{team:teamId},{cacheMs:6*3600e3,force});
+  const teamBlock=result.data.response?.[0]||{};
+  return {
+    team:teamBlock.team||null,
+    players:(teamBlock.players||[]).map(p=>({
+      id:p.id,name:p.name,age:p.age,number:p.number,position:p.position
+    })),
+    quota:result.quota,
+    checkedAt:result.fetchedAt
+  };
+}
+async function findUpcomingFixture(homeId,awayId,{force=false}={}){
+  const result=await apiFootball("/fixtures",{team:homeId,next:20,timezone:"Africa/Lusaka"},{cacheMs:10*60e3,force});
+  const matches=(result.data.response||[]);
+  const exact=matches.find(x=>{
+    const h=x.teams?.home?.id, a=x.teams?.away?.id;
+    return (h===homeId&&a===awayId)||(h===awayId&&a===homeId);
+  });
+  return {match:exact||null, quota:result.quota, checkedAt:result.fetchedAt};
+}
+async function fixtureDetails(fixtureId,{force=false}={}){
+  const result=await apiFootball("/fixtures",{id:fixtureId,timezone:"Africa/Lusaka"},{cacheMs:2*60e3,force});
+  return {match:result.data.response?.[0]||null, quota:result.quota, checkedAt:result.fetchedAt};
+}
+async function fixtureInjuries(fixtureId,{force=false}={}){
+  const result=await apiFootball("/injuries",{fixture:fixtureId,timezone:"Africa/Lusaka"},{cacheMs:2*60e3,force});
+  const rows=(result.data.response||[]).map(x=>({
+    player:x.player?.name||"",
+    playerId:x.player?.id||null,
+    team:x.team?.name||"",
+    teamId:x.team?.id||null,
+    type:x.player?.type||x.type||"",
+    reason:x.player?.reason||x.reason||""
+  }));
+  return {rows,quota:result.quota,checkedAt:result.fetchedAt};
+}
+async function recentTransfers(teamId,{force=false}={}){
+  const result=await apiFootball("/transfers",{team:teamId},{cacheMs:6*3600e3,force});
+  const cut=Date.now()-1000*60*60*24*180;
+  const rows=[];
+  for(const entry of (result.data.response||[])){
+    const player=entry.player||{};
+    for(const t of (entry.transfers||[])){
+      const ts=Date.parse(t.date||"");
+      if(!Number.isFinite(ts)||ts<cut) continue;
+      rows.push({
+        player:player.name||"",
+        date:t.date||"",
+        type:t.type||"",
+        from:t.teams?.out?.name||"",
+        to:t.teams?.in?.name||""
+      });
+    }
+  }
+  rows.sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+  return {rows:rows.slice(0,20),quota:result.quota,checkedAt:result.fetchedAt};
+}
+function compactLineups(match){
+  return (match?.lineups||[]).map(l=>({
+    team:l.team?.name||"",
+    formation:l.formation||"",
+    coach:l.coach?.name||"",
+    startXI:(l.startXI||[]).map(x=>x.player?.name).filter(Boolean),
+    substitutes:(l.substitutes||[]).map(x=>x.player?.name).filter(Boolean)
+  }));
+}
+function compactFixture(match){
+  if(!match) return null;
+  return {
+    id:match.fixture?.id,
+    date:match.fixture?.date,
+    timestamp:match.fixture?.timestamp,
+    status:match.fixture?.status?.long||match.fixture?.status?.short||"",
+    venue:match.fixture?.venue?.name||"",
+    city:match.fixture?.venue?.city||"",
+    league:match.league?.name||"",
+    country:match.league?.country||"",
+    season:match.league?.season||null,
+    round:match.league?.round||"",
+    home:{id:match.teams?.home?.id,name:match.teams?.home?.name||""},
+    away:{id:match.teams?.away?.id,name:match.teams?.away?.name||""},
+    lineups:compactLineups(match)
+  };
+}
+function lastQuota(...items){
+  const flat=items.flat().filter(Boolean);
+  for(let i=flat.length-1;i>=0;i--) if(flat[i].quota) return flat[i].quota;
+  return null;
+}
+async function buildAuthenticityGate(fixtureText,round){
+  const parsed=parseFixtureTeams(fixtureText);
+  if(!parsed){
+    return {
+      status:"FAILED",
+      checkedAt:isoNow(),
+      warnings:["Could not split fixture into two team names. Use 'Team A vs Team B'."],
+      requested:{home:"",away:""},
+      resolved:null, fixture:null, squads:null, injuries:[], transfers:[], confirmedLineups:false
+    };
+  }
+  const force=round>1;
+  const home=await resolveTeam(parsed.home,{force:false});
+  const away=await resolveTeam(parsed.away,{force:false});
+  const warnings=[];
+  if(!home.best||home.confidence<0.42) warnings.push(`Home team resolution is uncertain: "${parsed.home}".`);
+  if(!away.best||away.confidence<0.42) warnings.push(`Away team resolution is uncertain: "${parsed.away}".`);
+  if(!home.best||!away.best){
+    return {
+      status:"FAILED",checkedAt:isoNow(),warnings,requested:parsed,
+      resolved:{home,away},fixture:null,squads:null,injuries:[],transfers:[],confirmedLineups:false,
+      quota:lastQuota(home,away)
+    };
+  }
+
+  const homeSquad=await currentSquad(home.best.id,{force});
+  const awaySquad=await currentSquad(away.best.id,{force});
+  const candidate=await findUpcomingFixture(home.best.id,away.best.id,{force});
+  let details=null, injuries={rows:[]}, transfers=[];
+  if(candidate.match){
+    details=await fixtureDetails(candidate.match.fixture.id,{force:true});
+    injuries=await fixtureInjuries(candidate.match.fixture.id,{force:true});
+  }else{
+    warnings.push("API-Football did not find this matchup among the home team's next 20 fixtures.");
+  }
+  // A fresh Relearn round adds transfer activity so stale squad/player claims get another check.
+  if(round>1){
+    const [ht,at]=await Promise.all([
+      recentTransfers(home.best.id,{force:true}),
+      recentTransfers(away.best.id,{force:true})
+    ]);
+    transfers=[...(ht.rows||[]),...(at.rows||[])].sort((a,b)=>String(b.date).localeCompare(String(a.date))).slice(0,30);
+  }
+
+  const fixture=compactFixture(details?.match||candidate.match);
+  const lineups=fixture?.lineups||[];
+  const confirmedLineups=lineups.some(x=>(x.startXI||[]).length>=10);
+  if(fixture){
+    const ids=[fixture.home?.id,fixture.away?.id];
+    if(!ids.includes(home.best.id)||!ids.includes(away.best.id)){
+      warnings.push("Resolved fixture teams do not exactly match both resolved team IDs.");
+    }
+  }
+  if(!confirmedLineups) warnings.push("Confirmed starting XIs are not available yet; do not present a predicted XI as confirmed.");
+
+  let status="VERIFIED";
+  if(warnings.length || home.confidence<0.65 || away.confidence<0.65 || !fixture) status="CAUTION";
+  if(home.confidence<0.42 || away.confidence<0.42) status="FAILED";
+
+  return {
+    status,
+    checkedAt:isoNow(),
+    requested:parsed,
+    resolved:{
+      home:{id:home.best.id,name:home.best.name,country:home.best.country,confidence:home.confidence},
+      away:{id:away.best.id,name:away.best.name,country:away.best.country,confidence:away.confidence}
+    },
+    fixture,
+    squads:{
+      home:{team:home.best.name,count:homeSquad.players.length,players:homeSquad.players},
+      away:{team:away.best.name,count:awaySquad.players.length,players:awaySquad.players}
+    },
+    injuries:injuries.rows||[],
+    transfers,
+    confirmedLineups,
+    warnings,
+    quota:lastQuota(details,injuries,candidate,homeSquad,awaySquad,home,away)
+  };
+}
+
+function structuredDigest(gate){
+  if(!gate) return "Unavailable";
+  const playerList = side => (gate.squads?.[side]?.players||[]).map(p=>`${p.name} (${p.position||"?"})`).join(", ");
+  const lineupText=(gate.fixture?.lineups||[]).map(l=>`${l.team}: ${l.startXI.join(", ")} | Bench: ${l.substitutes.join(", ")}`).join("\n");
+  const injuryText=(gate.injuries||[]).map(x=>`${x.team}: ${x.player} — ${x.type}${x.reason?` (${x.reason})`:""}`).join("\n");
+  const transferText=(gate.transfers||[]).map(x=>`${x.date}: ${x.player} ${x.from} -> ${x.to} [${x.type}]`).join("\n");
+  return `
+AUTHENTICITY STATUS: ${gate.status}
+CHECKED AT: ${gate.checkedAt}
+REQUESTED: ${gate.requested?.home||"?"} vs ${gate.requested?.away||"?"}
+RESOLVED HOME: ${gate.resolved?.home?.name||"unresolved"} (confidence ${gate.resolved?.home?.confidence??0})
+RESOLVED AWAY: ${gate.resolved?.away?.name||"unresolved"} (confidence ${gate.resolved?.away?.confidence??0})
+FIXTURE: ${JSON.stringify(gate.fixture)}
+CURRENT HOME SQUAD: ${playerList("home")}
+CURRENT AWAY SQUAD: ${playerList("away")}
+CURRENT INJURIES/SUSPENSIONS:
+${injuryText||"None returned / unavailable"}
+CONFIRMED LINEUPS:
+${lineupText||"Not available"}
+RECENT TRANSFERS (extra check on Relearn rounds):
+${transferText||"Not queried in this round or none returned"}
+WARNINGS: ${(gate.warnings||[]).join(" | ")||"None"}
+`;
+}
+
+
+
+function zambiaDate(offsetDays=0){
+  const d=new Date(Date.now()+offsetDays*86400000);
+  // Africa/Lusaka is UTC+2 and has no DST.
+  const local=new Date(d.getTime()+2*3600000);
+  return local.toISOString().slice(0,10);
+}
+
+function coverageObjectForSeason(leagueResponse, season){
+  const item=(leagueResponse?.data?.response||[])[0];
+  const seasons=item?.seasons||[];
+  const s=seasons.find(x=>Number(x.year)===Number(season)) || seasons.find(x=>x.current) || seasons.at(-1);
+  return s?.coverage||null;
+}
+function bool(v){return v===true}
+function coverageScore(coverage){
+  if(!coverage)return {score:0,parts:[],note:"No league-season coverage object returned."};
+  const fx=coverage.fixtures||{};
+  const weights=[
+    ["events",bool(fx.events),10],
+    ["lineups",bool(fx.lineups),16],
+    ["fixture statistics",bool(fx.statistics_fixtures),16],
+    ["player statistics",bool(fx.statistics_players),10],
+    ["players",bool(coverage.players),8],
+    ["injuries",bool(coverage.injuries),14],
+    ["predictions",bool(coverage.predictions),8],
+    ["standings",bool(coverage.standings),5],
+    ["top scorers/assists/cards",bool(coverage.top_scorers)||bool(coverage.top_assists)||bool(coverage.top_cards),5]
+  ];
+  let score=0,total=weights.reduce((a,x)=>a+x[2],0),parts=[];
+  for(const [name,ok,w] of weights){if(ok)score+=w;parts.push({name,available:ok,weight:w});}
+  return {score:Math.round(score/total*100),parts,note:"Odds coverage is deliberately excluded from discovery scoring."};
+}
+function discoveryPriority(leagueName,country){
+  const s=`${leagueName||""} ${country||""}`.toLowerCase();
+  const names=[
+    "champions league","europa league","conference league","premier league","la liga",
+    "serie a","bundesliga","ligue 1","eredivisie","primeira liga","major league soccer",
+    "mls","championship","brasileiro","liga profesional","j1 league","a-league"
+  ];
+  const hit=names.findIndex(x=>s.includes(x));
+  return hit>=0 ? (20-hit) : 0;
+}
+async function fixturesForDate(date){
+  const r=await apiFootball("/fixtures",{date,timezone:"Africa/Lusaka"},{cacheMs:5*60e3,force:true});
+  const rows=(r.data.response||[]).filter(x=>{
+    const short=x.fixture?.status?.short||"";
+    return ["NS","TBD"].includes(short);
+  });
+  return {rows,quota:r.quota,checkedAt:r.fetchedAt};
+}
+async function leagueCoverage(leagueId,season){
+  const r=await apiFootball("/leagues",{id:leagueId,season},{cacheMs:12*3600e3});
+  const coverage=coverageObjectForSeason(r,season);
+  return {coverage,score:coverageScore(coverage),quota:r.quota,checkedAt:r.fetchedAt};
+}
+async function discoverDataRichFixtures({days=2,maxResults=5}={}){
+  const horizon=Math.max(1,Math.min(3,Number(days||2)));
+  const dateResults=[];
+  for(let i=0;i<horizon;i++) dateResults.push(await fixturesForDate(zambiaDate(i)));
+  const all=dateResults.flatMap(x=>x.rows);
+  const grouped=new Map();
+  for(const m of all){
+    const id=m.league?.id,season=m.league?.season;
+    if(!id||!season)continue;
+    const key=`${id}:${season}`;
+    if(!grouped.has(key))grouped.set(key,{leagueId:id,season,name:m.league?.name||"",country:m.league?.country||"",fixtures:[]});
+    grouped.get(key).fixtures.push(m);
+  }
+
+  // Quota-aware first pass: prefer competitions likely to have rich public/structured data,
+  // but the final score comes from actual coverage flags, never odds.
+  const groups=[...grouped.values()]
+    .sort((a,b)=>(discoveryPriority(b.name,b.country)+Math.min(8,b.fixtures.length))-(discoveryPriority(a.name,a.country)+Math.min(8,a.fixtures.length)))
+    .slice(0,12);
+
+  const covered=[];
+  for(const g of groups){
+    const cov=await leagueCoverage(g.leagueId,g.season);
+    covered.push({...g,coverage:cov});
+  }
+  const rich=covered.filter(g=>g.coverage.score.score>=68);
+
+  const candidates=[];
+  // Use only a manageable number of fixtures for web-availability probes.
+  const pool=rich.flatMap(g=>g.fixtures.map(m=>({m,g})))
+    .sort((a,b)=>b.g.coverage.score.score-a.g.coverage.score.score)
+    .slice(0,12);
+
+  for(const {m,g} of pool){
+    const home=m.teams?.home?.name||"",away=m.teams?.away?.name||"";
+    const q=`${home} vs ${away} ${String(m.fixture?.date||"").slice(0,10)} team news statistics injuries preview`;
+    let results=[];
+    try{results=await tavilySearch(q)}catch{}
+    const sourceCount=results.length;
+    const officialish=results.filter(r=>/(official|club|league|uefa|fifa|premierleague|laliga|bundesliga|seriea)/i.test(`${r.title} ${r.url}`)).length;
+    const webScore=Math.min(20,sourceCount*3 + Math.min(5,officialish*2));
+    const structured=g.coverage.score.score;
+    const total=Math.min(100,Math.round(structured*0.8+webScore));
+    if(sourceCount<3)continue;
+    candidates.push({
+      fixtureId:m.fixture?.id,
+      fixture:`${home} vs ${away}`,
+      date:m.fixture?.date,
+      league:g.name,
+      country:g.country,
+      season:g.season,
+      structuredCoverageScore:structured,
+      publicSourceCount:sourceCount,
+      officialishSourceCount:officialish,
+      dataAvailabilityScore:total,
+      coverageParts:g.coverage.score.parts,
+      discoveryQuery:q,
+      discoverySources:results.map(r=>({title:r.title,url:r.url,published_date:r.published_date||""})),
+      note:"Selected for data availability. Bookmaker odds were not used in discovery scoring."
+    });
+  }
+  candidates.sort((a,b)=>b.dataAvailabilityScore-a.dataAvailabilityScore);
+  return {
+    checkedAt:isoNow(),
+    dates:[...new Set(all.map(x=>String(x.fixture?.date||"").slice(0,10)).filter(Boolean))],
+    scannedFixtures:all.length,
+    scannedLeagueSeasons:groups.length,
+    candidates:candidates.slice(0,Math.max(1,Math.min(8,Number(maxResults||5)))),
+    methodology:"Structured league-season coverage + fresh public-source availability. Odds are excluded from discovery ranking."
+  };
+}
+
+async function preMatchOdds(fixtureId){
+  if(!fixtureId)return {available:false,rows:[],checkedAt:isoNow(),reason:"No verified fixture ID."};
+  const r=await apiFootball("/odds",{fixture:fixtureId,page:1},{cacheMs:10*60e3,force:true});
+  const rows=[];
+  const snapshots=r.data.response||[];
+  for(const snap of snapshots){
+    const update=snap.update||"";
+    for(const book of (snap.bookmakers||[])){
+      for(const bet of (book.bets||[])){
+        for(const v of (bet.values||[])){
+          const odd=Number(v.odd);
+          if(!Number.isFinite(odd)||odd<=1)continue;
+          rows.push({
+            bookmakerId:book.id,
+            bookmaker:book.name||"",
+            betId:bet.id,
+            bet:bet.name||"",
+            selection:v.value||"",
+            decimalOdds:odd,
+            update
+          });
+        }
+      }
+    }
+  }
+  return {
+    available:rows.length>0,
+    rows,
+    checkedAt:r.fetchedAt,
+    quota:r.quota,
+    reason:rows.length?"":"No pre-match odds were returned for this fixture."
+  };
+}
+function normOddsText(s){
+  return String(s||"").toLowerCase()
+    .replace(/[^a-z0-9.+-]+/g," ")
+    .replace(/\s+/g," ").trim();
+}
+function termsMatch(text,terms=[]){
+  const hay=normOddsText(text);
+  const good=(terms||[]).map(normOddsText).filter(Boolean);
+  return !good.length || good.some(t=>hay.includes(t));
+}
+function matchOddsForCandidate(candidate,oddsRows){
+  const lookup=candidate?.oddsLookup||{};
+  const betTerms=lookup.betTerms||[];
+  const selectionTerms=lookup.selectionTerms||[];
+  let matches=oddsRows.filter(r=>termsMatch(r.bet,betTerms)&&termsMatch(r.selection,selectionTerms));
+  // Fallback using words from exact market when lookup misses.
+  if(!matches.length){
+    const tokens=normOddsText(candidate?.market||"").split(" ").filter(x=>x.length>=4).slice(0,4);
+    matches=oddsRows.filter(r=>tokens.some(t=>normOddsText(`${r.bet} ${r.selection}`).includes(t)));
+  }
+  matches.sort((a,b)=>b.decimalOdds-a.decimalOdds);
+  return matches;
+}
+function valueAudit(shortlist,odds){
+  const rows=odds?.rows||[];
+  const audits=[];
+  for(const c of (shortlist||[])){
+    const fair=Number(c.fairProbabilityPct);
+    const matches=matchOddsForCandidate(c,rows);
+    const best=matches[0]||null;
+    if(!best||!Number.isFinite(fair)||fair<=0||fair>=100){
+      audits.push({market:c.market,status:"UNPRICED_OR_UNMAPPED",fairProbabilityPct:Number.isFinite(fair)?fair:null,match:null});
+      continue;
+    }
+    const breakEven=100/best.decimalOdds;
+    const edge=fair-breakEven;
+    let status="NO_VALUE_SIGNAL";
+    if(edge>=5)status="POTENTIAL_VALUE";
+    else if(edge>=2)status="VALUE_WATCH";
+    audits.push({
+      market:c.market,
+      marketFamily:c.marketFamily||"",
+      fairProbabilityPct:Math.round(fair*10)/10,
+      probabilityConfidence:c.probabilityConfidence||"",
+      bestBookmaker:best.bookmaker,
+      bestDecimalOdds:best.decimalOdds,
+      breakEvenProbabilityPct:Math.round(breakEven*10)/10,
+      edgePercentagePoints:Math.round(edge*10)/10,
+      status,
+      matchedBet:best.bet,
+      matchedSelection:best.selection,
+      bookmakerPrices:matches.slice(0,8)
+    });
+  }
+  const potential=audits.filter(x=>x.status==="POTENTIAL_VALUE").sort((a,b)=>b.edgePercentagePoints-a.edgePercentagePoints);
+  return {
+    checkedAt:odds?.checkedAt||isoNow(),
+    oddsAvailable:Boolean(odds?.available),
+    bookmakerCount:new Set(rows.map(x=>x.bookmaker)).size,
+    betTypeCount:new Set(rows.map(x=>x.bet)).size,
+    selectionCount:rows.length,
+    audits,
+    potentialValues:potential,
+    headline:potential.length
+      ? `Whilst researching, I found ${potential.length} potential value ${potential.length===1?"bet":"bets"}. The market price may be underestimating the evidence-based chance.`
+      : "No clear potential-value signal survived the sporting shortlist and price comparison."
+  };
+}
+
+function makeVideoQueries(fixture, gate, round){
+  const home=gate?.resolved?.home?.name||gate?.requested?.home||"";
+  const away=gate?.resolved?.away?.name||gate?.requested?.away||"";
+  const freshness=round>1?"latest recent":"recent";
+  return [
+    `${home} ${freshness} match highlights official site:youtube.com`,
+    `${away} ${freshness} match highlights official site:youtube.com`,
+    `${home} tactical highlights recent match site:youtube.com`,
+    `${away} tactical highlights recent match site:youtube.com`
+  ].filter(q=>q.trim().length>20);
+}
+
+function isYoutubeUrl(url){
+  try{
+    const u=new URL(url);
+    return ["youtube.com","www.youtube.com","m.youtube.com","youtu.be"].includes(u.hostname);
+  }catch{return false}
+}
+function youtubeVideoKey(url){
+  try{
+    const u=new URL(url);
+    if(u.hostname==="youtu.be") return u.pathname.replace("/","");
+    if(u.pathname==="/watch") return u.searchParams.get("v")||url;
+    const m=u.pathname.match(/\/shorts\/([^/?]+)/); if(m)return m[1];
+    return url;
+  }catch{return url}
+}
+function chooseVideoCandidates(videoScout, gate){
+  const home=normalizeTeamName(gate?.resolved?.home?.name||gate?.requested?.home||"");
+  const away=normalizeTeamName(gate?.resolved?.away?.name||gate?.requested?.away||"");
+  const all=[];
+  for(const group of videoScout){
+    for(const r of (group.results||[])){
+      if(!isYoutubeUrl(r.url)) continue;
+      const hay=normalizeTeamName(`${r.title||""} ${r.content||""}`);
+      let side="general";
+      if(home && hay.includes(home)) side="home";
+      if(away && hay.includes(away)) side=side==="home"?"both":"away";
+      all.push({...r,side});
+    }
+  }
+  // Deduplicate by video id/url and prioritize "official" or league/club-looking results.
+  const seen=new Set();
+  const unique=all.filter(x=>{
+    const k=youtubeVideoKey(x.url);
+    if(seen.has(k))return false; seen.add(k); return true;
+  }).sort((a,b)=>{
+    const sa=/official|league|highlights/i.test(`${a.title} ${a.content}`)?1:0;
+    const sb=/official|league|highlights/i.test(`${b.title} ${b.content}`)?1:0;
+    return sb-sa;
+  });
+
+  const picked=[];
+  const takeSide=(side,n)=>{
+    for(const v of unique){
+      if(picked.length>=4)break;
+      if((v.side===side||v.side==="both") && !picked.includes(v)){
+        picked.push(v); if(--n<=0)break;
+      }
+    }
+  };
+  takeSide("home",2); takeSide("away",2);
+  for(const v of unique) if(picked.length<4 && !picked.includes(v)) picked.push(v);
+  return picked.slice(0,4);
+}
+
+async function reviewYoutubeHighlights(videos, gate){
+  if(!videos.length){
+    return {status:"UNAVAILABLE", reviewedAt:isoNow(), videos:[], summary:"No public YouTube highlight links were found by the scouting searches.", observations:[]};
+  }
+  const key=requireEnv("GEMINI_API_KEY");
+  const model=process.env.GEMINI_MODEL||"gemini-3.8-flash";
+  const { GoogleGenAI } = await import("@google/genai");
+  const ai=new GoogleGenAI({apiKey:key});
+
+  const prompt=`You are reviewing PUBLIC FOOTBALL HIGHLIGHT VIDEOS as supporting evidence for a pre-match scouting report.
+
+Teams: ${gate?.resolved?.home?.name||gate?.requested?.home||"Home"} vs ${gate?.resolved?.away?.name||gate?.requested?.away||"Away"}
+
+Review every supplied video visually and, where audio/commentary helps, use it cautiously.
+
+For EACH video:
+- identify which team(s) and match appear in the footage;
+- note if the video looks like highlights rather than a full match;
+- assess attacking routes: wings, central combinations, transitions, set pieces;
+- assess shot/chance quality visible in the selected clips;
+- note defensive shape/errors, counter vulnerability, goalkeeper actions;
+- note crossing and corner/set-piece patterns if actually visible;
+- note pressing, pace, physicality, and behavior while leading/trailing if observable;
+- explicitly state what CANNOT be concluded because highlights are selective.
+
+Do NOT invent statistics from video. Do NOT infer that unshown events did not happen.
+Do NOT use the video to identify a current player-club relationship if structured squad data contradicts it.
+
+Return ONLY JSON:
+{
+ "summary":"overall video evidence",
+ "observations":[
+   {
+     "url":"exact supplied URL",
+     "teamOrMatch":"...",
+     "evidence":["..."],
+     "limitations":["..."],
+     "usefulness":"HIGH|MEDIUM|LOW"
+   }
+ ],
+ "crossVideoPatterns":["..."],
+ "warning":"Highlights are selective evidence and not a full-match sample."
+}`;
+
+  const input=[{type:"text",text:prompt},...videos.map(v=>({type:"video",uri:v.url}))];
+  try{
+    const interaction=await ai.interactions.create({model,input});
+    const out=String(interaction.output_text||interaction.outputText||"").trim();
+    let parsed;
+    try{parsed=JSON.parse(out)}catch{
+      const m=out.match(/\{[\s\S]*\}/);
+      if(!m)throw new Error("Video model returned unreadable output.");
+      parsed=JSON.parse(m[0]);
+    }
+    return {
+      status:"COMPLETE",
+      reviewedAt:isoNow(),
+      videos:videos.map(v=>({title:v.title,url:v.url,side:v.side||"general"})),
+      ...parsed
+    };
+  }catch(err){
+    return {
+      status:"PARTIAL",
+      reviewedAt:isoNow(),
+      videos:videos.map(v=>({title:v.title,url:v.url,side:v.side||"general"})),
+      summary:`Video links were found, but automated visual review could not complete: ${err.message}`,
+      observations:[],
+      crossVideoPatterns:[],
+      warning:"Do not treat linked highlights as reviewed footage unless status is COMPLETE."
+    };
+  }
+}
+
+function flattenScoutLinks(webScout=[],videoScout=[]){
+  const rows=[];
+  const seen=new Set();
+  for(const group of [...webScout,...videoScout]){
+    for(const r of (group.results||[])){
+      if(!r.url)continue;
+      const key=r.url;
+      if(seen.has(key))continue;
+      seen.add(key);
+      rows.push({
+        query:group.query,
+        category:group.category,
+        title:r.title||r.url,
+        url:r.url,
+        published_date:r.published_date||"",
+        score:r.score??null
+      });
+    }
+  }
+  return rows;
+}
+
+function makeQueries(fixture, round, gate){
+  const home=gate?.resolved?.home?.name||gate?.requested?.home||"";
+  const away=gate?.resolved?.away?.name||gate?.requested?.away||"";
+  const match=`${home} vs ${away}`.trim()||fixture;
+  const date=(gate?.fixture?.date||"").slice(0,10);
+  const dated=date?`${date} `:"";
+  if(round<=1){
+    return [
+      `${dated}${match} official team news injuries suspensions confirmed lineup latest`,
+      `${dated}${match} recent form last 5 last 10 goals xG shots shots on target possession statistics`,
+      `${dated}${match} corners for against crosses width set pieces cards fouls referee`,
+      `${dated}${match} tactical preview opponent strength head to head venue weather recent highlights`
+    ];
+  }
+  return [
+    `${dated}${match} confirmed lineup injury update suspension transfer team news latest`,
+    `${dated}${match} tactical weaknesses pressing transitions counter attacks set pieces game state`,
+    `${dated}${match} recent opponent strength shots on target corners xG defensive record`,
+    `${dated}${match} exact goal corner card thresholds contradictory evidence preview`
+  ];
+}
+
+async function tavilySearch(query){
+  const key=requireEnv("TAVILY_API_KEY");
+  const response=await fetch("https://api.tavily.com/search",{
+    method:"POST",
+    headers:{"Content-Type":"application/json","Authorization":`Bearer ${key}`},
+    body:JSON.stringify({query,search_depth:"basic",max_results:5,include_answer:false,include_raw_content:false})
+  });
+  const text=await response.text();
+  if(!response.ok) throw new Error(`Tavily search failed (${response.status}): ${text.slice(0,240)}`);
+  const data=JSON.parse(text);
+  return (data.results||[]).map(r=>({
+    title:r.title||"",url:r.url||"",content:r.content||"",
+    score:typeof r.score==="number"?r.score:null,
+    published_date:r.published_date||""
+  }));
+}
+function dedupeSources(groups){
+  const seen=new Set(),out=[];
+  for(const group of groups) for(const s of group){
+    if(!s.url||seen.has(s.url))continue;seen.add(s.url);out.push(s);
+  }
+  return out.slice(0,18);
+}
+function sourceDigest(sources){
+  return sources.map((s,i)=>{
+    const snippet=String(s.content||"").replace(/\s+/g," ").slice(0,1200);
+    return `[S${i+1}] ${s.title}\nURL: ${s.url}\nDATE: ${s.published_date||"unknown"}\nEXTRACT: ${snippet}`;
+  }).join("\n\n");
+}
+
+
+function parseJsonObject(text,label="AI"){
+  const raw=String(text||"").trim().replace(/^```(?:json)?\s*/i,"").replace(/\s*```$/,"");
+  try{return JSON.parse(raw)}catch{
+    const m=raw.match(/\{[\s\S]*\}/);
+    if(!m)throw new Error(`${label} returned unreadable JSON.`);
+    return JSON.parse(m[0]);
+  }
+}
+function clampPct(v){
+  const n=Number(v);
+  return Number.isFinite(n)?Math.max(0,Math.min(100,n)):null;
+}
+function canonicalKey(s){
+  return String(s||"").toUpperCase().replace(/[^A-Z0-9.+-]+/g,"_").replace(/^_+|_+$/g,"").replace(/_+/g,"_").slice(0,100);
+}
+function councilEvidencePack({fixture,gate,sources,videoReview}){
+  return `FIXTURE:\n${fixture}\n\nSTRUCTURED CURRENT-FOOTBALL DATA:\n${structuredDigest(gate)}\n\nFRESH WEB EVIDENCE:\n${sourceDigest(sources)}\n\nVIDEO REVIEW:\n${JSON.stringify(videoReview||{status:"UNAVAILABLE"},null,2)}`;
+}
+function councilPrompt(payload){
+  return `You are one independent member of a multi-model FOOTBALL RESEARCH COUNCIL.
+
+Every council model receives the SAME locked evidence pack.
+BOOKMAKER ODDS, favourites, prediction-site consensus and the user's original market are hidden.
+
+${councilEvidencePack(payload)}
+
+RULES:
+1. Verify present-day team and player identities from structured data.
+2. Reject stale player-club claims.
+3. Analyze squad quality, lineup state, injuries, rotation/rest, opponent-adjusted form, goals/chances,
+   shots/SOT, possession/territory, corners/width/crossing/set pieces, cards/referee where available,
+   tactics/game states, H2H/venue/weather and video evidence.
+4. Screen realistic market families independently.
+5. Attack your strongest candidate with counter-evidence.
+6. Never call a pick safe, guaranteed or a banker.
+7. If evidence is not strong enough for an exact market, return UNRESOLVED.
+8. fairProbabilityPct is a cautious estimate, not a fact.
+
+Return ONLY JSON:
+{
+  "primaryMarket":"Exact market and line OR UNRESOLVED",
+  "canonicalMarketKey":"Examples: BTTS_YES, TOTAL_GOALS_OVER_2.5, HOME_DOUBLE_CHANCE_1X, HOME_TEAM_GOALS_OVER_0.5, TOTAL_CORNERS_OVER_8.5, UNRESOLVED",
+  "marketFamily":"...",
+  "fairProbabilityPct":62,
+  "confidence":"HIGH|MEDIUM|LOW",
+  "classification":"STRONG|MEDIUM|GENUINE DANGER|UNRESOLVED / HIGH RISK",
+  "strongestReasons":["..."],
+  "counterEvidence":["..."],
+  "topAlternatives":[{"market":"...","canonicalMarketKey":"...","fairProbabilityPct":58}],
+  "dataWeaknesses":["..."],
+  "antiBiasCheck":"..."
+}`;
+}
+function normalizeCouncilResult(provider,modelName,obj){
+  const unresolved=/UNRESOLVED/i.test(String(obj?.primaryMarket||""));
+  return {
+    provider,modelName,available:true,
+    primaryMarket:unresolved?"UNRESOLVED":String(obj?.primaryMarket||"UNRESOLVED"),
+    canonicalMarketKey:unresolved?"UNRESOLVED":canonicalKey(obj?.canonicalMarketKey||obj?.primaryMarket||"UNRESOLVED"),
+    marketFamily:String(obj?.marketFamily||""),
+    fairProbabilityPct:clampPct(obj?.fairProbabilityPct),
+    confidence:String(obj?.confidence||"LOW"),
+    classification:String(obj?.classification||"UNRESOLVED / HIGH RISK"),
+    strongestReasons:Array.isArray(obj?.strongestReasons)?obj.strongestReasons:[],
+    counterEvidence:Array.isArray(obj?.counterEvidence)?obj.counterEvidence:[],
+    topAlternatives:Array.isArray(obj?.topAlternatives)?obj.topAlternatives:[],
+    dataWeaknesses:Array.isArray(obj?.dataWeaknesses)?obj.dataWeaknesses:[],
+    antiBiasCheck:String(obj?.antiBiasCheck||"")
+  };
+}
+async function geminiCouncilMember(payload){
+  const key=requireEnv("GEMINI_API_KEY");
+  const model=process.env.GEMINI_COUNCIL_MODEL||process.env.GEMINI_MODEL||"gemini-3.8-flash";
+  const response=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,{
+    method:"POST",
+    headers:{"Content-Type":"application/json","x-goog-api-key":key},
+    body:JSON.stringify({contents:[{parts:[{text:councilPrompt(payload)}]}],generationConfig:{temperature:0.25,maxOutputTokens:3500,responseMimeType:"application/json"}})
+  });
+  const txt=await response.text();
+  if(!response.ok)throw new Error(`Gemini council failed (${response.status}): ${txt.slice(0,260)}`);
+  const d=JSON.parse(txt);
+  const out=(d.candidates?.[0]?.content?.parts||[]).map(p=>p.text||"").join("");
+  return normalizeCouncilResult("Google","Gemini",parseJsonObject(out,"Gemini"));
+}
+async function groqCouncilMember(payload,model,display){
+  const key=requireEnv("GROQ_API_KEY");
+  const response=await fetch("https://api.groq.com/openai/v1/chat/completions",{
+    method:"POST",
+    headers:{"Content-Type":"application/json","Authorization":`Bearer ${key}`},
+    body:JSON.stringify({model,temperature:0.2,max_completion_tokens:3500,messages:[{role:"user",content:councilPrompt(payload)}]})
+  });
+  const txt=await response.text();
+  if(!response.ok)throw new Error(`${display} council failed (${response.status}): ${txt.slice(0,260)}`);
+  const d=JSON.parse(txt);
+  return normalizeCouncilResult("Groq",display,parseJsonObject(d.choices?.[0]?.message?.content||"",display));
+}
+async function cloudflareCouncilMember(payload){
+  const account=process.env.CLOUDFLARE_ACCOUNT_ID,token=process.env.CLOUDFLARE_AUTH_TOKEN;
+  if(!account||!token)throw new Error("Cloudflare AI is not configured.");
+  const model=process.env.CLOUDFLARE_LLAMA_MODEL||"@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+  const response=await fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(account)}/ai/run/${model}`,{
+    method:"POST",
+    headers:{"Content-Type":"application/json","Authorization":`Bearer ${token}`},
+    body:JSON.stringify({messages:[{role:"user",content:councilPrompt(payload)}],temperature:0.2,max_tokens:3500})
+  });
+  const txt=await response.text();
+  if(!response.ok)throw new Error(`Meta Llama council failed (${response.status}): ${txt.slice(0,260)}`);
+  const d=JSON.parse(txt);
+  const out=d.result?.response ?? d.result?.text ?? d.result?.output_text ?? d.result ?? "";
+  return normalizeCouncilResult("Cloudflare","Meta Llama",parseJsonObject(typeof out==="string"?out:JSON.stringify(out),"Meta Llama"));
+}
+async function openRouterCouncilMember(payload){
+  const key=requireEnv("OPENROUTER_API_KEY");
+  const model=process.env.OPENROUTER_COUNCIL_MODEL||"openrouter/free";
+  const response=await fetch("https://openrouter.ai/api/v1/chat/completions",{
+    method:"POST",
+    headers:{
+      "Content-Type":"application/json","Authorization":`Bearer ${key}`,
+      "HTTP-Referer":process.env.APP_PUBLIC_URL||"https://localhost/",
+      "X-Title":"Football Fact-First Research"
+    },
+    body:JSON.stringify({model,temperature:0.2,max_tokens:3500,messages:[{role:"user",content:councilPrompt(payload)}]})
+  });
+  const txt=await response.text();
+  if(!response.ok)throw new Error(`OpenRouter council failed (${response.status}): ${txt.slice(0,260)}`);
+  const d=JSON.parse(txt);
+  return normalizeCouncilResult("OpenRouter","Free Router",parseJsonObject(d.choices?.[0]?.message?.content||"","OpenRouter"));
+}
+function median(nums){
+  const a=nums.filter(Number.isFinite).sort((x,y)=>x-y);
+  if(!a.length)return null;
+  const m=Math.floor(a.length/2);
+  return a.length%2?a[m]:(a[m-1]+a[m])/2;
+}
+function aggregateCouncil(results){
+  const available=results.filter(x=>x.available);
+  const resolved=available.filter(x=>x.canonicalMarketKey&&x.canonicalMarketKey!=="UNRESOLVED");
+  const groups=new Map();
+  for(const r of resolved){
+    const k=r.canonicalMarketKey;
+    if(!groups.has(k))groups.set(k,[]);
+    groups.get(k).push(r);
+  }
+  const ranked=[...groups.entries()].map(([key,members])=>({
+    canonicalMarketKey:key,market:members[0]?.primaryMarket||key,count:members.length,
+    models:members.map(x=>x.modelName),
+    medianFairProbabilityPct:median(members.map(x=>Number(x.fairProbabilityPct)).filter(Number.isFinite))
+  })).sort((a,b)=>b.count-a.count||(b.medianFairProbabilityPct||0)-(a.medianFairProbabilityPct||0));
+  const top=ranked[0]||null,total=available.length||1,share=top?top.count/total:0;
+  let convergence="NONE";
+  if(top?.count>=3&&share>=0.6)convergence="HIGH";
+  else if(top?.count>=2&&share>=0.4)convergence="MEDIUM";
+  else if(top?.count>=2)convergence="LOW";
+  return {
+    availableModels:available.length,
+    unresolvedModels:available.filter(x=>x.canonicalMarketKey==="UNRESOLVED").length,
+    convergence,
+    consensusMarket:top?.market||"NO CONSENSUS",
+    consensusCanonicalKey:top?.canonicalMarketKey||"",
+    modelsAgreeing:top?.models||[],
+    medianFairProbabilityPct:top?.medianFairProbabilityPct??null,
+    groups:ranked,
+    note:top?`${top.count} of ${available.length} available council models independently selected the same canonical market.`:"No resolved market convergence was found."
+  };
+}
+async function runAiCouncil(payload){
+  const jobs=[{provider:"Google",name:"Gemini",run:()=>geminiCouncilMember(payload)}];
+  if(process.env.GROQ_API_KEY){
+    jobs.push(
+      {provider:"Groq",name:"OpenAI GPT-OSS 120B",run:()=>groqCouncilMember(payload,"openai/gpt-oss-120b","OpenAI GPT-OSS 120B")},
+      {provider:"Groq",name:"Qwen 3.8 27B",run:()=>groqCouncilMember(payload,"qwen/qwen3.8-27b","Qwen 3.8 27B")}
+    );
+  }
+  if(process.env.CLOUDFLARE_ACCOUNT_ID&&process.env.CLOUDFLARE_AUTH_TOKEN)jobs.push({provider:"Cloudflare",name:"Meta Llama",run:()=>cloudflareCouncilMember(payload)});
+  if(process.env.OPENROUTER_API_KEY)jobs.push({provider:"OpenRouter",name:"Free Router",run:()=>openRouterCouncilMember(payload)});
+  const settled=await Promise.allSettled(jobs.map(j=>j.run()));
+  const results=settled.map((x,i)=>x.status==="fulfilled"?x.value:{provider:jobs[i].provider,modelName:jobs[i].name,available:false,error:String(x.reason?.message||x.reason||"Model failed")});
+  return {checkedAt:isoNow(),members:results,aggregation:aggregateCouncil(results)};
+}
+async function apiFootballPrediction(fixtureId){
+  if(!fixtureId)return {available:false,checkedAt:isoNow(),reason:"No verified fixture ID."};
+  try{
+    const r=await apiFootball("/predictions",{fixture:fixtureId},{cacheMs:15*60e3,force:true});
+    const item=r.data.response?.[0]||null;
+    if(!item)return {available:false,checkedAt:r.fetchedAt,reason:"No API-Football prediction returned."};
+    return {available:true,checkedAt:r.fetchedAt,prediction:{
+      winner:item.predictions?.winner?.name||"",comment:item.predictions?.winner?.comment||"",
+      underOver:item.predictions?.under_over||"",advice:item.predictions?.advice||"",
+      percent:item.predictions?.percent||{},goals:item.predictions?.goals||{}
+    }};
+  }catch(err){return {available:false,checkedAt:isoNow(),reason:err.message};}
+}
+async function externalPredictionBenchmarks(fixture,gate){
+  const prediction=await apiFootballPrediction(gate?.fixture?.id);
+  const home=gate?.resolved?.home?.name||gate?.requested?.home||"",away=gate?.resolved?.away?.name||gate?.requested?.away||"";
+  const date=(gate?.fixture?.date||"").slice(0,10);
+  const targets=[["Forebet","forebet.com"],["PredictZ","predictz.com"],["WinDrawWin","windrawwin.com"],["FootyStats","footystats.org"]];
+  const websites=[];
+  for(const [name,domain] of targets){
+    const q=`site:${domain} ${home} ${away} ${date} prediction`;
+    try{
+      const results=await tavilySearch(q);
+      websites.push({name,domain,query:q,found:results.length>0,results:results.slice(0,4).map(r=>({title:r.title,url:r.url,content:r.content,published_date:r.published_date||""}))});
+    }catch(err){websites.push({name,domain,query:q,found:false,error:err.message,results:[]});}
+  }
+  return {checkedAt:isoNow(),apiFootball:prediction,websites,rule:"External prediction benchmarks are collected after independent sporting analysis and cannot choose the internal market."};
+}
+
+function analysisPrompt({fixture,round,originalMarket,previousRounds,sources,gate,videoReview}){
+  const prior=previousRounds?.length?JSON.stringify(previousRounds.slice(-3),null,2):"None";
+  const original=originalMarket||"Not supplied";
+  return `
+You are an evidence-first football match research analyst. Freshness and identity accuracy are mandatory.
+
+FIXTURE: ${fixture}
+RESEARCH ROUND: ${round}
+ORIGINAL USER/TICKET MARKET (do not anchor on it): ${original}
+
+STRUCTURED AUTHENTICITY DATA FROM API-FOOTBALL:
+${structuredDigest(gate)}
+
+HARD AUTHENTICITY RULES:
+1. Treat API-Football's current squad/fixture data as the primary identity check for club membership and fixture identity.
+2. NEVER describe a player as currently belonging to a club merely because an old article says so.
+3. If a web source names a player for a club but that player is absent from the current squad, mark the claim stale/unverified unless a newer official source clearly explains the situation.
+4. Confirmed XI means only the structured confirmed lineup. Predicted/probable XI must never be called confirmed.
+5. Prefer newer dated sources. If sources conflict, report the conflict; do not silently choose the older claim.
+6. If fixture identity or both team identities are not verified strongly enough, finalMarket MUST be "UNRESOLVED".
+7. Do not invent players, transfers, injuries, suspensions, statistics, referee assignments, odds, or lineups.
+8. Before the sporting market, explicitly audit stale-player/team claims and reject them.
+9. If structured coverage is missing, say unavailable instead of filling the gap from memory.
+
+MANDATORY THREE-STAGE WORKFLOW:
+
+STAGE 1 — DATA GATHERING
+Collect and organize the evidence before drawing conclusions:
+- current club identity and current squad;
+- fixture identity/date/competition;
+- injuries/suspensions/transfers;
+- confirmed vs predicted lineups;
+- rest, rotation, motivation, travel;
+- last 5 / last 10 / larger sample;
+- opponent strength;
+- goals, xG/chance quality where available;
+- shots, shots on target, possession/territory;
+- corners, width, crossing, set pieces;
+- cards/referee;
+- tactical and game-state evidence;
+- H2H, venue, weather;
+- video/highlight evidence;
+- all source links and freshness.
+
+STAGE 2 — DATA ANALYSIS
+Analyze the gathered evidence quantitatively and qualitatively.
+Do not merely repeat data. Identify patterns, consistency, contradictions, data gaps,
+opponent-strength distortion, recency effects and how strongly each dataset supports
+or weakens each market family.
+
+Return explicit analytical scores from 0 to 100:
+- evidenceQualityScore: overall completeness/reliability/freshness;
+- structuredDataScore: quality of structured/API data;
+- webEvidenceScore: quality/freshness/diversity of public web sources;
+- videoEvidenceScore: usefulness of reviewed video evidence;
+- contradictionRiskScore: higher means more serious contradictions/uncertainty;
+- dataFreshnessScore: how current the evidence is.
+
+For every shortlisted market, return:
+- sportingSupportScore 0-100;
+- contradictionRiskScore 0-100;
+- dataSupportScore 0-100;
+- fairProbabilityPct;
+- probabilityConfidence.
+
+STAGE 3 — PRESENTATION
+Present the conclusion clearly enough that the UI can visualize it with:
+- a bar chart comparing exact shortlisted markets;
+- a pie/donut chart showing data coverage (complete / partial / unavailable);
+- a quality-score chart for evidence quality, structured data, web evidence,
+  video evidence, freshness and contradiction risk;
+- concise narrative explaining what the charts mean.
+Charts are a presentation of the analysis, not a replacement for the underlying facts.
+
+ANALYSIS ORDER:
+1. Verify fixture and current clubs.
+2. Audit present-day squads, confirmed lineup status, injuries/suspensions and transfers when available.
+3. Build a football-only match profile.
+4. Adjust recent form for opponent strength.
+5. SCREEN EVERY REALISTIC MARKET FAMILY WITHOUT USING ODDS. You must explicitly consider:
+   - 1X2
+   - Double Chance
+   - Draw No Bet
+   - Asian Handicap
+   - European Handicap
+   - Total Goals
+   - Team Goals
+   - Both Teams To Score
+   - First-Half Goals
+   - Second-Half Goals
+   - Win/Double-Chance + Goals combinations
+   - Total Corners
+   - Team Corners
+   - First-Half Corners
+   - Corner Handicap / Corner 1X2
+   - Cards / Team Cards
+   - Shots / Shots On Target when supported
+   - Any other bookmaker market that is genuinely supported by the evidence
+   Record every family in marketScreen with CONSIDERED, ELIMINATED, or DATA_UNAVAILABLE and why.
+6. Shortlist 2-8 exact markets/lines strictly from sporting evidence, still without seeing prices.
+   For every surviving candidate estimate a cautious fairProbabilityPct and a confidence label.
+   The probability must reflect evidence uncertainty and cannot be invented when data is weak.
+7. Adversarially attack each candidate; exact-opposite/failure-set test where applicable.
+8. Choose a final sporting market only if evidence converges. Otherwise UNRESOLVED.
+9. Compare with original market only after independent conclusion.
+10. PRICE/VALUE COMPARISON HAPPENS SERVER-SIDE AFTER THIS ANALYSIS. Do not let assumed prices influence the sporting shortlist.
+11. Never call a pick safe, guaranteed, or a banker.
+
+ROUND ${round}: treat this as a fresh independent cycle. Previous rounds are only for end-stage convergence comparison.
+
+PREVIOUS ROUNDS:
+${prior}
+
+VIDEO REVIEW OF RECENT HIGHLIGHTS:
+${JSON.stringify(videoReview||{status:"UNAVAILABLE"},null,2)}
+
+VIDEO-EVIDENCE RULES:
+- Use video review only as supporting evidence.
+- Highlights are selective and must never be treated as a complete sample of a team's whole match.
+- If videoReview.status is not COMPLETE, do not claim the videos were visually reviewed.
+- Give higher weight to recurring patterns seen across multiple recent videos, but still cross-check them against structured/statistical evidence.
+- Do not invent shot counts, xG, corner counts, possession, or lineup facts from highlight footage.
+
+FRESH WEB SOURCES:
+${sourceDigest(sources)}
+
+Return ONLY valid JSON:
+{
+  "fixture":"...",
+  "fixtureVerified":true,
+  "verificationNote":"...",
+  "freshness":{
+    "structuredCheckedAt":"...",
+    "fixtureDate":"...",
+    "confirmedLineupsAvailable":false,
+    "freshnessNote":"..."
+  },
+  "authenticityAssessment":{
+    "status":"VERIFIED|CAUTION|FAILED",
+    "homeCurrentClubVerified":true,
+    "awayCurrentClubVerified":true,
+    "note":"..."
+  },
+  "staleClaimsRejected":[
+    {"claim":"...","reason":"...","sourceRef":"S1 or structured check"}
+  ],
+  "verifiedCurrentPlayersReferenced":["..."],
+  "videoReviewSummary":"...",
+  "dataAnalysis":{
+    "evidenceQualityScore":82,
+    "structuredDataScore":88,
+    "webEvidenceScore":76,
+    "videoEvidenceScore":64,
+    "contradictionRiskScore":28,
+    "dataFreshnessScore":91,
+    "keyPatterns":["..."],
+    "keyContradictions":["..."],
+    "analysisNarrative":"...",
+    "marketScores":[
+      {
+        "market":"Exact market and line",
+        "sportingSupportScore":78,
+        "contradictionRiskScore":24,
+        "dataSupportScore":83,
+        "fairProbabilityPct":62,
+        "probabilityConfidence":"HIGH|MEDIUM|LOW"
+      }
+    ]
+  },
+  "dataCoverage":[{"item":"fixture_verification","status":"complete|partial|unavailable","note":"..."}],
+  "matchProfile":{
+    "squadAndLineups":"...",
+    "formAndOpponentStrength":"...",
+    "attackAndDefence":"...",
+    "shotsPossessionTerritory":"...",
+    "cornersWidthSetPieces":"...",
+    "disciplineReferee":"...",
+    "tacticsAndGameState":"...",
+    "contextRestMotivation":"...",
+    "h2hVenueWeatherVideo":"..."
+  },
+  "marketScreen":[
+    {"family":"1X2","status":"CONSIDERED|ELIMINATED|DATA_UNAVAILABLE","reason":"..."}
+  ],
+  "shortlist":[
+    {
+      "market":"Exact market and line",
+      "marketFamily":"...",
+      "fairProbabilityPct":62,
+      "probabilityConfidence":"HIGH|MEDIUM|LOW",
+      "sportingSupportScore":78,
+      "contradictionRiskScore":24,
+      "dataSupportScore":83,
+      "oddsLookup":{"betTerms":["Match Winner"],"selectionTerms":["Home"]},
+      "support":["..."],
+      "counterEvidence":["..."],
+      "survivesKillTest":true
+    }
+  ],
+  "finalMarket":"Exact market and line OR UNRESOLVED",
+  "runnerUp":"Exact market and line OR NONE",
+  "classification":"STRONG|MEDIUM|GENUINE DANGER|UNRESOLVED / HIGH RISK",
+  "whyFinal":"...",
+  "remainingDanger":"...",
+  "originalMarketComparison":"...",
+  "missingData":["..."],
+  "antiBiasCheck":"...",
+  "roundConvergence":"...",
+  "sourceRefs":["S1"]
+}
+
+For dataCoverage include each exactly once:
+${CHECKLIST.join(", ")}
+
+Ground factual claims only in the structured data or supplied web sources.
+`;
+}
+
+async function geminiAnalyze(payload){
+  const key=requireEnv("GEMINI_API_KEY");
+  const model=process.env.GEMINI_MODEL||"gemini-3.8-flash";
+  const response=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,{
+    method:"POST",
+    headers:{"Content-Type":"application/json","x-goog-api-key":key},
+    body:JSON.stringify({
+      contents:[{parts:[{text:analysisPrompt(payload)}]}],
+      generationConfig:{temperature:0.15,maxOutputTokens:9000,responseMimeType:"application/json"}
+    })
+  });
+  const text=await response.text();
+  if(!response.ok) throw new Error(`Gemini analysis failed (${response.status}): ${text.slice(0,320)}`);
+  const data=JSON.parse(text);
+  const output=(data.candidates?.[0]?.content?.parts||[]).map(p=>p.text||"").join("").trim();
+  try{return JSON.parse(output)}catch{
+    const m=output.match(/\{[\s\S]*\}/);
+    if(!m)throw new Error("Gemini returned an unreadable analysis.");
+    return JSON.parse(m[0]);
+  }
+}
+
+app.get("/api/health",(req,res)=>{
+  res.json({
+    ok:true,version:"3.0.0",
+    tavilyConfigured:Boolean(process.env.TAVILY_API_KEY),
+    geminiConfigured:Boolean(process.env.GEMINI_API_KEY),
+    apiFootballConfigured:Boolean(process.env.API_FOOTBALL_KEY),
+    groqConfigured:Boolean(process.env.GROQ_API_KEY),
+    cloudflareConfigured:Boolean(process.env.CLOUDFLARE_ACCOUNT_ID&&process.env.CLOUDFLARE_AUTH_TOKEN),
+    openRouterConfigured:Boolean(process.env.OPENROUTER_API_KEY),
+    model:process.env.GEMINI_MODEL||"gemini-3.8-flash"
+  });
+});
+
+app.get("/api/provider-test",async(req,res)=>{
+  try{
+    const result=await apiFootball("/status",{}, {force:true});
+    res.json({ok:true,quota:result.quota,status:result.data.response||result.data});
+  }catch(err){
+    res.status(err.status||500).json({ok:false,error:err.message});
+  }
+});
+
+
+app.post("/api/discover",async(req,res)=>{
+  try{
+    requireEnv("API_FOOTBALL_KEY");
+    requireEnv("TAVILY_API_KEY");
+    const days=Math.max(1,Math.min(3,Number(req.body?.days||2)));
+    const maxResults=Math.max(1,Math.min(8,Number(req.body?.maxResults||5)));
+    const result=await discoverDataRichFixtures({days,maxResults});
+    res.json({ok:true,...result});
+  }catch(err){
+    console.error(err);
+    res.status(err.status||500).json({error:err.message||"Discovery failed."});
+  }
+});
+
+app.post("/api/research",async(req,res)=>{
+  try{
+    const fixture=cleanFixture(req.body?.fixture);
+    if(!fixture||fixture.length<5)return res.status(400).json({error:"Please provide a valid fixture, preferably 'Team A vs Team B'."});
+    const round=Math.max(1,Math.min(20,Number(req.body?.round||1)));
+    const originalMarket=String(req.body?.originalMarket||"").trim().slice(0,180);
+    const previousRounds=Array.isArray(req.body?.previousRounds)?req.body.previousRounds:[];
+    requireEnv("API_FOOTBALL_KEY");
+    requireEnv("TAVILY_API_KEY");
+    requireEnv("GEMINI_API_KEY");
+
+    const gate=await buildAuthenticityGate(fixture,round);
+
+    // General live-web scouting. Preserve every query/result for the user's source audit.
+    const queries=makeQueries(fixture,round,gate);
+    const groups=[];
+    const webScout=[];
+    for(const q of queries){
+      const results=await tavilySearch(q);
+      groups.push(results);
+      webScout.push({category:"web",query:q,results});
+    }
+    const sources=dedupeSources(groups);
+    if(!sources.length)return res.status(502).json({error:"No usable web sources were returned for this fixture."});
+
+    // Dedicated video scouting and actual visual review of public YouTube highlights.
+    const videoQueries=makeVideoQueries(fixture,gate,round);
+    const videoScout=[];
+    for(const q of videoQueries){
+      const results=await tavilySearch(q);
+      videoScout.push({category:"video-search",query:q,results});
+    }
+    const videoCandidates=chooseVideoCandidates(videoScout,gate);
+    const videoReview=await reviewYoutubeHighlights(videoCandidates,gate);
+
+    const allScoutedLinks=flattenScoutLinks(webScout,videoScout);
+    const analysis=await geminiAnalyze({fixture,round,originalMarket,previousRounds,sources,gate,videoReview});
+
+    if(gate.status==="FAILED"){
+      analysis.finalMarket="UNRESOLVED";
+      analysis.classification="UNRESOLVED / HIGH RISK";
+      analysis.remainingDanger=`Authenticity gate failed: ${(gate.warnings||[]).join(" ")}`;
+    }
+
+    // AI COUNCIL: independent models see the same evidence pack with odds hidden.
+    const aiCouncil=await runAiCouncil({fixture,gate,sources,videoReview});
+
+    // External prediction websites/APIs are benchmarks only and come after independent analysis.
+    const externalBenchmarks=await externalPredictionBenchmarks(fixture,gate);
+
+    // ODDS LAST.
+    const oddsSnapshot=await preMatchOdds(gate?.fixture?.id);
+    const valueCandidates=[...(analysis.shortlist||[])];
+    const agg=aiCouncil.aggregation||{};
+    if(agg.consensusCanonicalKey&&agg.consensusMarket&&agg.consensusMarket!=="NO CONSENSUS"){
+      const exists=valueCandidates.some(x=>canonicalKey(x.canonicalMarketKey||x.market)===agg.consensusCanonicalKey);
+      if(!exists)valueCandidates.push({
+        market:agg.consensusMarket,marketFamily:"AI Council Consensus",
+        fairProbabilityPct:agg.medianFairProbabilityPct,
+        probabilityConfidence:agg.convergence==="HIGH"?"HIGH":agg.convergence==="MEDIUM"?"MEDIUM":"LOW",
+        canonicalMarketKey:agg.consensusCanonicalKey,oddsLookup:{betTerms:[],selectionTerms:[]}
+      });
+    }
+    const value=valueAudit(valueCandidates,oddsSnapshot);
+
+    const primaryKey=canonicalKey((analysis.shortlist||[]).find(x=>x.market===analysis.finalMarket)?.canonicalMarketKey||analysis.finalMarket);
+    const councilKey=agg.consensusCanonicalKey||"";
+    const same=Boolean(councilKey)&&primaryKey===councilKey;
+    const finalConvergence={
+      status:!councilKey||agg.convergence==="NONE"?"NO COUNCIL CONSENSUS":same?"PRIMARY + COUNCIL CONVERGED":"PRIMARY / COUNCIL DISAGREE",
+      primaryMarket:analysis.finalMarket||"UNRESOLVED",
+      councilMarket:agg.consensusMarket||"NO CONSENSUS",
+      councilConvergence:agg.convergence||"NONE",
+      note:same?"The primary fact-first analysis and independent council point to the same canonical market.":"Disagreement is preserved instead of forcing agreement. Relearn is recommended."
+    };
+
+    res.json({
+      ok:true,fixture,round,
+      searchesUsed:queries.length+videoQueries.length,
+      queries,videoQueries,sources,
+      authenticityGate:gate,videoReview,
+      sourceAudit:{webScout,videoScout,allScoutedLinks},
+      aiCouncil,externalBenchmarks,finalConvergence,
+      oddsSnapshot:{
+        available:oddsSnapshot.available,checkedAt:oddsSnapshot.checkedAt,
+        bookmakerCount:value.bookmakerCount,betTypeCount:value.betTypeCount,
+        selectionCount:value.selectionCount,reason:oddsSnapshot.reason||""
+      },
+      valueAudit:value,analysis
+    });
+  }catch(err){
+    console.error(err);
+    res.status(err.status||500).json({error:err.message||"Research failed."});
+  }
+});
+
+app.use((req,res)=>res.sendFile(path.join(__dirname,"public","index.html")));
+app.listen(PORT,()=>console.log(`Football Fact-First Research v3.0 running on port ${PORT}`));

@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#071923">
+<title>Football Fact-First Research v3.0 — Offline Preview</title>
+<style>
+:root{--bg:#06141d;--panel:#0b202c;--line:#1d4050;--text:#eaf5f8;--muted:#9fb7c2;--accent:#3bd6b0;--gold:#f0b94d;--danger:#ff7272;--warn:#f7cf6b;--good:#67dda0;--blue:#63b8ff;--radius:16px}
+*{box-sizing:border-box}body{margin:0;background:linear-gradient(180deg,#041018,#08202c);color:var(--text);font-family:Inter,system-ui,Segoe UI,Arial,sans-serif;min-height:100vh}button,input,textarea{font:inherit}.app{max-width:1180px;margin:auto;padding:18px}.top{display:flex;gap:14px;align-items:center;justify-content:space-between;margin-bottom:16px}.brand h1{font-size:1.18rem;margin:0}.brand small,.muted{color:var(--muted)}.badge{border:1px solid var(--line);padding:7px 10px;border-radius:999px;color:var(--muted);font-size:.82rem}.tabs{display:flex;gap:8px;overflow:auto;padding-bottom:8px}.tab{background:#0c2632;border:1px solid var(--line);color:var(--text);padding:10px 14px;border-radius:12px;white-space:nowrap}.tab.active{border-color:var(--accent);color:var(--accent)}.panel{background:rgba(11,32,44,.93);border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin:12px 0;box-shadow:0 14px 50px rgba(0,0,0,.18)}h2,h3{margin:0 0 10px}.tiny{font-size:.78rem}textarea,input{width:100%;background:#071923;color:var(--text);border:1px solid #285062;border-radius:11px;padding:11px;outline:none}textarea{min-height:132px;resize:vertical}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:12px}button{cursor:pointer;border:0;border-radius:11px;padding:11px 14px;font-weight:700}.primary{background:var(--accent);color:#041018}.secondary{background:#183745;color:var(--text);border:1px solid #2b5363}.danger{background:#4a2026;color:#ffd9d9;border:1px solid #74303a}button:disabled{opacity:.45;cursor:not-allowed}.status{padding:10px 12px;border-radius:12px;background:#0b1d27;border:1px solid var(--line);margin-top:10px}.status.good{border-color:#2d7759}.status.bad{border-color:#824246}.status.warn{border-color:#7a6833}.fixture{padding:14px;border:1px solid var(--line);border-radius:15px;background:#091b25;margin:12px 0}.fixture-head{display:flex;gap:10px;align-items:flex-start;justify-content:space-between}.fixture-title{font-weight:800;font-size:1.02rem}.pill{padding:5px 8px;border-radius:999px;font-size:.72rem;font-weight:800;border:1px solid var(--line);display:inline-block}.STRONG,.VERIFIED{color:var(--good);border-color:#3a785f}.MEDIUM,.CAUTION{color:var(--warn);border-color:#756737}.GENUINE{color:#ff9c70;border-color:#754532}.UNRESOLVED,.FAILED{color:var(--danger);border-color:#7d3b3b}.market{font-size:1.08rem;color:var(--gold);font-weight:900;margin:8px 0}details{border-top:1px solid var(--line);padding-top:9px;margin-top:9px}summary{cursor:pointer;color:#cde8f0;font-weight:700}ul{margin:7px 0 7px 20px;padding:0}.source{display:block;color:#85ccff;text-decoration:none;margin:5px 0;word-break:break-word}.progress{height:8px;background:#071923;border-radius:99px;overflow:hidden;margin:10px 0}.progress>div{height:100%;background:var(--accent);width:0}.hidden{display:none!important}.coverage{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.cov{font-size:.8rem;border:1px solid var(--line);padding:8px;border-radius:10px}.cov.complete{border-color:#376d57}.cov.partial{border-color:#756737}.cov.unavailable{border-color:#693b45}.notice{border:1px solid #755f2c;background:#2c2513;color:#f3dfac;padding:10px 12px;border-radius:12px}.session-row{display:flex;align-items:center;justify-content:space-between;gap:8px;border-top:1px solid var(--line);padding:9px 0}.auth{border:1px solid #315567;background:#071a24;border-radius:13px;padding:12px;margin:10px 0}.auth-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.auth-item{background:#0a2230;border:1px solid #214454;border-radius:10px;padding:9px;font-size:.82rem}.right{text-align:right}code{background:#071923;border:1px solid var(--line);padding:2px 5px;border-radius:6px}
+@media(max-width:720px){.app{padding:11px}.grid,.coverage,.auth-grid{grid-template-columns:1fr}.top{align-items:flex-start}.fixture-head{display:block}.fixture-head .pill{margin-top:6px}}
+.council-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+.council-card{border:1px solid #2a4d5c;background:#081b25;border-radius:12px;padding:10px}
+.council-model{font-weight:900;color:var(--blue)}.council-market{font-weight:900;color:var(--gold);margin:5px 0}
+.post-row{display:grid;grid-template-columns:minmax(180px,1.5fr) 1fr 1fr 1fr;gap:8px;align-items:center;padding:10px 0;border-top:1px solid var(--line)}
+.post-head{font-size:.75rem;color:var(--muted);text-transform:uppercase}
+@media(max-width:720px){.council-grid{grid-template-columns:1fr}.post-row{grid-template-columns:1fr}.post-head{display:none}}
+</style>
+</head>
+<body>
+<div class="app">
+<div class="top"><div class="brand"><h1>⚽ Football Fact-First Research <span class="pill CAUTION">v3.0 Offline Preview</span></h1><small>Offline preview • interface demonstration only • no live research</small></div><div class="badge" id="healthBadge">Checking engine…</div></div>
+<div class="notice" style="margin-bottom:12px">
+<strong>OFFLINE PREVIEW MODE</strong><br>
+<div class="chartbox" style="margin-top:12px">
+<div class="chart-title">🧠 AI Council Preview</div>
+<div class="council-grid">
+<div class="council-card"><div class="council-model">Gemini</div><div class="council-market">BTTS Yes</div><span class="tiny">Fair 66%</span></div>
+<div class="council-card"><div class="council-model">OpenAI GPT-OSS 120B</div><div class="council-market">BTTS Yes</div><span class="tiny">Fair 64%</span></div>
+<div class="council-card"><div class="council-model">Qwen 3.8 27B</div><div class="council-market">Over 2.5 Goals</div><span class="tiny">Fair 59%</span></div>
+<div class="council-card"><div class="council-model">Meta Llama</div><div class="council-market">BTTS Yes</div><span class="tiny">Fair 67%</span></div>
+</div>
+<div class="status good"><strong>HIGH CONVERGENCE</strong><br>3 of 4 example models independently converge on BTTS Yes.</div>
+</div>
+<div class="chartbox">
+<div class="chart-title">📌 POSTBOARD Preview</div>
+<div class="post-row post-head"><div>Fixture / evidence</div><div>Primary market</div><div>AI Council</div><div>Value</div></div>
+<div class="post-row"><div><strong>Example FC vs Sample United</strong><br><span class="tiny muted">Evidence 88/100</span></div><div><strong>BTTS Yes</strong></div><div><strong>HIGH</strong><br><span class="tiny muted">BTTS Yes</span></div><div><strong style="color:var(--good)">POTENTIAL VALUE</strong><br><span class="tiny">+8.1pp example edge</span></div></div>
+</div>
+<div class="pipeline" style="margin-top:10px">
+ <div class="stage"><strong><span class="num">1</span>DATA GATHERING</strong><span class="tiny muted">Current data, web sources, videos, source links.</span></div>
+ <div class="stage"><strong><span class="num">2</span>DATA ANALYSIS</strong><span class="tiny muted">Patterns, contradictions, scores and market comparisons.</span></div>
+ <div class="stage"><strong><span class="num">3</span>PRESENTATION</strong><span class="tiny muted">Bar chart, coverage donut, quality scores and narrative.</span></div>
+</div>
+<div style="margin-top:10px">
+  <span class="pill VERIFIED">MODE 1</span> I will give the games &nbsp;
+  <span class="pill VERIFIED">MODE 2</span> Find data-rich games for me
+</div>
+
+<div class="chartbox">
+ <div class="chart-title">📊 Bar Chart — Example Presentation</div>
+ <div class="bar-row"><div><strong>Over 1.5 Goals</strong></div><div class="bar-track"><div class="bar-fill" style="width:82%"></div></div><div><strong>82</strong></div></div>
+ <div class="bar-row"><div><strong>Home Team Over 0.5</strong></div><div class="bar-track"><div class="bar-fill" style="width:74%"></div></div><div><strong>74</strong></div></div>
+ <div class="bar-row"><div><strong>Over 8.5 Corners</strong></div><div class="bar-track"><div class="bar-fill" style="width:63%"></div></div><div><strong>63</strong></div></div>
+</div>
+<div class="chartbox">
+ <div class="chart-title">🥧 Data Coverage — Example</div>
+ <div class="donut-wrap"><div class="donut" style="background:conic-gradient(var(--good) 0 67%,var(--warn) 67% 87%,var(--danger) 87% 100%)"><div class="donut-center">13<br><span class="tiny">of 15<br>usable</span></div></div>
+ <div class="legend"><div class="legend-row"><span class="legend-dot" style="background:var(--good)"></span>Complete: 10</div><div class="legend-row"><span class="legend-dot" style="background:var(--warn)"></span>Partial: 3</div><div class="legend-row"><span class="legend-dot" style="background:var(--danger)"></span>Unavailable: 2</div></div></div>
+</div>
+<div class="valuebox valuehit" style="margin-top:10px">
+  <strong>💰 Value Watch Preview</strong><br>
+  Whilst researching, if a sporting candidate has an estimated fair probability clearly above the bookmaker break-even probability, the online app will flag it here as <strong>POTENTIAL VALUE</strong>. Odds are checked only after the sporting research.
+</div>
+This version is only for seeing and testing the layout. It does not contact API-Football, Tavily, Gemini, BetPawa, or any website. Live squad verification and real match research are disabled here.
+</div>
+<div class="tabs"><button class="tab active" data-tab="session">Research Session</button><button class="tab" data-tab="history">History</button><button class="tab" data-tab="settings">Setup</button></div>
+
+<section id="tab-session">
+<div class="panel">
+<h2>Start a verified research session</h2>
+<p class="muted">Paste fixtures one per line. Best format: <strong>Home Team vs Away Team</strong>. Before analysis starts, the app checks current team identities and current squads using API-Football, then searches the live web.</p>
+<div class="grid">
+<div><label><strong>Fixtures</strong></label><textarea id="fixturesInput" placeholder="Example:
+Real Madrid vs Barcelona
+Arsenal vs Chelsea
+Inter Milan vs Juventus"></textarea></div>
+<div><label><strong>Optional original markets</strong></label><textarea id="marketsInput" placeholder="One market per line, matching fixture order.
+Leave blank for pure market discovery."></textarea></div>
+</div>
+<div class="notice tiny" style="margin-top:12px"><strong>Authenticity Gate:</strong> if current team identity cannot be verified, the app is not allowed to call the match STRONG. Current squad data overrides stale articles that attach a player to an old club. Confirmed XI is shown as confirmed only when the structured feed supplies it.</div>
+<div class="actions"><button class="primary" id="startBtn">Start Verified Research</button><button class="secondary" id="clearBtn">Clear Form</button></div>
+<div id="runStatus" class="status hidden"></div><div class="progress hidden" id="progress"><div></div></div>
+</div>
+<div id="results"></div>
+</section>
+
+<section id="tab-history" class="hidden">
+<div class="panel"><h2>Saved sessions</h2><p class="muted">Saved on this device. Export important sessions as backup.</p><div class="actions"><button class="secondary" id="exportAllBtn">Export All</button><label class="secondary" style="display:inline-flex;align-items:center;cursor:pointer">Import Backup<input type="file" id="importInput" accept=".json" hidden></label></div><div id="historyList"></div></div>
+</section>
+
+<section id="tab-settings" class="hidden">
+<div class="panel">
+<h2>Offline Preview</h2>
+<p>This copy is intentionally self-contained. It lets you inspect the phone/computer layout and test the research-session flow without internet access.</p>
+<div class="status warn">
+<strong>Disabled in offline preview:</strong><br>
+API-Football current squads, transfers, injuries and lineups • Tavily live web search • Gemini analysis • live source links.
+</div>
+<p class="muted" style="margin-top:12px">When you approve the design, use the online v2 package for real current-data research.</p>
+</div>
+</section>
+</div>
+<script>
+const KEY="footballFactFirstOfflinePreview_v2";
+let state=loadState();
+
+function loadState(){try{return JSON.parse(localStorage.getItem(KEY))||{sessions:[]}}catch{return{sessions:[]}}}
+function saveState(){localStorage.setItem(KEY,JSON.stringify(state))}
+function esc(s){return String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m]))}
+function fmtDate(x){try{return new Date(x).toLocaleString()}catch{return x}}
+function parseLines(id){return document.getElementById(id).value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean)}
+
+document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("active",x===b));
+  ["session","history","settings"].forEach(t=>document.getElementById("tab-"+t).classList.toggle("hidden",t!==b.dataset.tab));
+  if(b.dataset.tab==="history")renderHistory();
+});
+
+const healthBadge=document.getElementById("healthBadge");
+healthBadge.textContent="Offline preview";
+healthBadge.style.color="var(--warn)";
+
+const configStatus=document.getElementById("configStatus");
+if(configStatus){
+  configStatus.className="status warn";
+  configStatus.textContent="Offline preview: live research providers are disabled.";
+}
+const refreshHealth=document.getElementById("refreshHealth");
+if(refreshHealth) refreshHealth.onclick=()=>alert("Offline preview only. No live providers are connected.");
+const providerTest=document.getElementById("providerTest");
+if(providerTest) providerTest.onclick=()=>alert("Offline preview only. API-Football is disabled here.");
+
+document.getElementById("clearBtn").onclick=()=>{
+  document.getElementById("fixturesInput").value="";
+  document.getElementById("marketsInput").value="";
+};
+
+document.getElementById("startBtn").onclick=async()=>{
+  const fixtures=parseLines("fixturesInput");
+  const markets=parseLines("marketsInput");
+  if(!fixtures.length){alert("Paste at least one fixture.");return}
+
+  const session={
+    id:(crypto.randomUUID?crypto.randomUUID():String(Date.now())),
+    createdAt:new Date().toISOString(),
+    fixtures:fixtures.map((name,i)=>({
+      name, originalMarket:markets[i]||"", rounds:[makePreviewRound(name)], status:"done"
+    }))
+  };
+  state.sessions.unshift(session);
+  state.sessions=state.sessions.slice(0,30);
+  saveState();
+  renderSession(session);
+
+  const status=document.getElementById("runStatus");
+  status.className="status warn";
+  status.textContent="Offline preview generated. These are demonstration cards only — no live football facts were checked.";
+};
+
+function makePreviewRound(name){
+  return {
+    authenticityGate:{
+      status:"CAUTION",
+      checkedAt:new Date().toISOString(),
+      resolved:{
+        home:{name:"Offline preview — not verified",confidence:0},
+        away:{name:"Offline preview — not verified",confidence:0}
+      },
+      fixture:null,
+      squads:null,
+      injuries:[],
+      warnings:["Live team identity, squad, fixture, injuries and lineup verification are disabled in offline preview."],
+      quota:{dailyRemaining:"—",dailyLimit:"—"}
+    },
+    sources:[],
+    analysis:{
+      finalMarket:"NO LIVE MARKET — OFFLINE PREVIEW",
+      classification:"UNRESOLVED / HIGH RISK",
+      whyFinal:"This card demonstrates how a completed analysis will look. The offline preview deliberately does not invent a betting market or football facts.",
+      remainingDanger:"No live data has been checked.",
+      freshness:{freshnessNote:"Offline preview only",fixtureDate:""},
+      originalMarketComparison:"",
+      staleClaimsRejected:[],
+      verifiedCurrentPlayersReferenced:[],
+      shortlist:[
+        {market:"Candidate Market 1",survivesKillTest:false,support:["Live facts would appear here"],counterEvidence:["Contradictory evidence would appear here"]},
+        {market:"Candidate Market 2",survivesKillTest:false,support:["Threshold data would appear here"],counterEvidence:["Failure conditions would appear here"]}
+      ],
+      matchProfile:{
+        squadAndLineups:"Current squads and confirmed lineups will appear here in the online version.",
+        formAndOpponentStrength:"Last 5, last 10 and opponent-strength adjustment will appear here.",
+        attackAndDefence:"Goals, chance quality and defensive profile will appear here.",
+        shotsPossessionTerritory:"Shots, shots on target, possession and territory will appear here.",
+        cornersWidthSetPieces:"Corners, crossing, width and set-piece evidence will appear here.",
+        disciplineReferee:"Cards, fouls and referee information will appear here.",
+        tacticsAndGameState:"Tactical interaction and game-state stress tests will appear here.",
+        contextRestMotivation:"Rest, rotation, travel and motivation will appear here.",
+        h2hVenueWeatherVideo:"H2H, venue, weather and video evidence will appear here."
+      },
+      dataCoverage:[
+        {item:"fixture_verification",status:"unavailable",note:"Offline preview"},
+        {item:"current_squads_authenticity",status:"unavailable",note:"Offline preview"},
+        {item:"confirmed_lineups",status:"unavailable",note:"Offline preview"},
+        {item:"injuries_suspensions",status:"unavailable",note:"Offline preview"},
+        {item:"recent_transfers",status:"unavailable",note:"Offline preview"},
+        {item:"rest_rotation_motivation",status:"unavailable",note:"Offline preview"},
+        {item:"last5_last10_form",status:"unavailable",note:"Offline preview"},
+        {item:"goals_xg_chance_quality",status:"unavailable",note:"Offline preview"},
+        {item:"shots_sot_possession",status:"unavailable",note:"Offline preview"},
+        {item:"corners_width_crossing_setpieces",status:"unavailable",note:"Offline preview"},
+        {item:"cards_referee",status:"unavailable",note:"Offline preview"},
+        {item:"opponent_strength_adjustment",status:"unavailable",note:"Offline preview"},
+        {item:"tactical_matchup_game_states",status:"unavailable",note:"Offline preview"},
+        {item:"h2h_venue_weather",status:"unavailable",note:"Offline preview"},
+        {item:"video_evidence",status:"unavailable",note:"Offline preview"}
+      ],
+      missingData:["All live football data"],
+      antiBiasCheck:"Offline preview — no football conclusion was generated.",
+      roundConvergence:"Not applicable in offline preview."
+    }
+  }
+}
+
+function coverageHtml(list=[]){
+  return `<div class="coverage">${list.map(x=>`<div class="cov ${esc(x.status)}"><strong>${esc(x.item.replaceAll("_"," "))}</strong><br><span class="muted">${esc(x.status)} — ${esc(x.note)}</span></div>`).join("")}</div>`
+}
+function shortlistHtml(a=[]){
+  return a.map(x=>`<li><strong>${esc(x.market)}</strong> — preview only
+  <div class="tiny muted">Support: ${esc((x.support||[]).join(" • "))}</div>
+  <div class="tiny muted">Counter: ${esc((x.counterEvidence||[]).join(" • "))}</div></li>`).join("")
+}
+function authHtml(round){
+  const g=round.authenticityGate||{};
+  return `<div class="auth">
+    <div class="fixture-head"><strong>🔐 Authenticity Gate</strong><span class="pill CAUTION">OFFLINE PREVIEW</span></div>
+    <div class="auth-grid">
+      <div class="auth-item"><strong>Home resolved</strong><br>Not checked</div>
+      <div class="auth-item"><strong>Away resolved</strong><br>Not checked</div>
+      <div class="auth-item"><strong>Fixture</strong><br>Not checked</div>
+      <div class="auth-item"><strong>Live identity data</strong><br>Disabled offline</div>
+    </div>
+    <p class="tiny" style="color:var(--warn)"><strong>Warning:</strong> ${esc((g.warnings||[]).join(" • "))}</p>
+  </div>`
+}
+function analysisHtml(round){
+  const a=round.analysis||{};
+  return `${authHtml(round)}
+  <div class="market">${esc(a.finalMarket)}</div>
+  <span class="pill UNRESOLVED">${esc(a.classification)}</span>
+  <p>${esc(a.whyFinal)}</p>
+  <p class="tiny"><strong>Remaining danger:</strong> ${esc(a.remainingDanger)}</p>
+  <details open><summary>Stale-data audit</summary><p class="tiny muted">In the online version, stale player/club claims rejected by the authenticity gate appear here.</p></details>
+  <div class="auth">
+        <div class="fixture-head"><strong>🎥 Highlight Video Review</strong><span class="pill CAUTION">OFFLINE PREVIEW</span></div>
+        <p class="tiny">In the online version, recent public YouTube highlights for both teams will be searched and selected videos will be visually reviewed by Gemini.</p>
+        <a class="source" href="#" onclick="return false">Video 1: recent team highlights link will appear here</a>
+        <a class="source" href="#" onclick="return false">Video 2: opponent highlights link will appear here</a>
+        <p class="tiny muted"><strong>Important:</strong> highlights are selective evidence and never treated as a full-match sample.</p>
+        </div>
+        <details open><summary>ALL SOURCES SCOUTED</summary>
+        <a class="source" href="#" onclick="return false">#1 Example official team-news source</a>
+        <a class="source" href="#" onclick="return false">#2 Example statistics source</a>
+        <a class="source" href="#" onclick="return false">#3 Example YouTube highlight source</a>
+        <p class="tiny muted">The live app will list every unique source URL returned during scouting, including sources not used in the final conclusion.</p>
+        </details>
+        <details><summary>Candidate markets & kill test</summary><ol>${shortlistHtml(a.shortlist||[])}</ol></details>
+  <details><summary>Match profile</summary>${Object.entries(a.matchProfile||{}).map(([k,v])=>`<p class="tiny"><strong>${esc(k)}:</strong> ${esc(v)}</p>`).join("")}</details>
+  <details><summary>Data coverage checkpoint</summary>${coverageHtml(a.dataCoverage||[])}</details>
+  <details><summary>Missing data / anti-bias</summary><p class="tiny"><strong>Missing:</strong> ${esc((a.missingData||[]).join(" • "))}</p><p class="tiny"><strong>Anti-bias:</strong> ${esc(a.antiBiasCheck||"")}</p></details>`
+}
+function renderSession(session){
+  const box=document.getElementById("results");
+  box.innerHTML=`<div class="panel">
+    <div class="fixture-head"><div><h2>Offline Preview Session</h2><span class="muted tiny">${fmtDate(session.createdAt)}</span></div><button class="secondary" onclick="exportSession('${session.id}')">Export Session</button></div>
+    ${session.fixtures.map((f,i)=>`<div class="fixture">
+      <div class="fixture-head"><div><div class="fixture-title">${i+1}. ${esc(f.name)}</div>${f.originalMarket?`<div class="tiny muted">Original: ${esc(f.originalMarket)}</div>`:""}</div><span class="pill CAUTION">Preview</span></div>
+      ${analysisHtml(f.rounds[0])}
+      <div class="actions"><button class="secondary" onclick="alert('Relearn needs the online version because it must refresh current squads, transfers and fresh web sources.')">Relearn — Online Only</button></div>
+    </div>`).join("")}
+  </div>`;
+}
+function download(name,obj){
+  const blob=new Blob([JSON.stringify(obj,null,2)],{type:"application/json"});
+  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;a.click();URL.revokeObjectURL(a.href)
+}
+window.exportSession=id=>{const s=state.sessions.find(x=>x.id===id);if(s)download(`football-preview-${id.slice(0,8)}.json`,s)}
+document.getElementById("exportAllBtn").onclick=()=>download("football-offline-preview-backup.json",state);
+document.getElementById("importInput").onchange=async e=>{
+  try{
+    const data=JSON.parse(await e.target.files[0].text());
+    if(!Array.isArray(data.sessions))throw new Error("Invalid backup");
+    state=data;saveState();renderHistory();alert("Backup imported.")
+  }catch(err){alert(err.message)}
+  e.target.value="";
+};
+function renderHistory(){
+  const box=document.getElementById("historyList");
+  if(!state.sessions.length){box.innerHTML='<p class="muted">No saved preview sessions yet.</p>';return}
+  box.innerHTML=state.sessions.map(s=>`<div class="session-row">
+    <div><strong>${s.fixtures.length} fixtures</strong><br><span class="tiny muted">${fmtDate(s.createdAt)}</span></div>
+    <div class="right"><button class="secondary" onclick="openSession('${s.id}')">Open</button> <button class="danger" onclick="deleteSession('${s.id}')">Delete</button></div>
+  </div>`).join("")
+}
+window.openSession=id=>{
+  const s=state.sessions.find(x=>x.id===id);if(!s)return;
+  document.querySelector('[data-tab="session"]').click();renderSession(s)
+}
+window.deleteSession=id=>{
+  if(!confirm("Delete this saved preview session?"))return;
+  state.sessions=state.sessions.filter(x=>x.id!==id);saveState();renderHistory()
+}
+</script>
+</body></html>
