@@ -1,4 +1,4 @@
-# Football Fact-First Research v3.9 — Free-Tier Fixture Verification + Video Fallback
+# Football Fact-First Research v4.0 — Bookmaker Team-Name Resolver
 
 
 This version is designed specifically to prevent stale-player mistakes such as describing a footballer as being at an old club after a transfer.
@@ -434,3 +434,19 @@ This prevents mixed-version deployments from silently producing zero-data report
 - Video review retries multiple Gemini Flash models when one hits quota/rate limits.
 - Unreviewed video links now score 0 for video evidence.
 - If the Pre-Match Integrity Guard blocks betting, candidate markets and market charts are hidden.
+
+
+## v4.0 — bookmaker/database team-name resolver
+
+The LDU Quito vs SE Palmeiras SP test showed that the app could collect excellent web/video evidence
+but still fail fixture verification because a bookmaker-style club label did not match API-Football's team name.
+
+v4.0:
+- converts bookmaker labels such as `SE Palmeiras SP` into additional API search variants including `Palmeiras`;
+- strips common club/state affixes only at the edges of a team name;
+- scores API results against every generated alias, not only the raw bookmaker label;
+- keeps direct aliases for common problematic names;
+- fixes the UI bug where a successfully identified home team could display `Unresolved` with a non-zero confidence;
+- displays the exact name variants tried when resolution is weak.
+
+This is designed to reduce false FAILED authenticity gates without weakening the fixture-ID check.

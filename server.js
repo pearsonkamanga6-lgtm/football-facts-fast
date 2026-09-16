@@ -239,14 +239,27 @@ async function apiFootball(endpoint, params={}, {cacheMs=0, force=false}={}){
   return cacheMs ? setCached(cacheKey,value) : value;
 }
 
+function edgeCleanTeamName(name){
+  const tokens=normalizeTeamName(name).split(" ").filter(Boolean);
+  // Common bookmaker/database affixes and Brazilian state suffixes.
+  const edgeTokens=new Set([
+    "fc","cf","sc","ac","afc","ec","se","ud","cd","ad","ca","club",
+    "sp","rj","mg","rs","pr","ba","go","df","ce","pe","rn","pb","pa","am","ma","mt","ms","al","es"
+  ]);
+  let a=0,b=tokens.length;
+  while(a<b && edgeTokens.has(tokens[a]))a++;
+  while(b>a && edgeTokens.has(tokens[b-1]))b--;
+  return tokens.slice(a,b).join(" ").trim();
+}
 function teamSearchVariants(requested){
   const raw=String(requested||"").trim();
   const norm=normalizeTeamName(raw);
+  const core=edgeCleanTeamName(raw);
   const variants=[raw];
-  if(norm && norm.toLowerCase()!==raw.toLowerCase()) variants.push(norm);
 
-  const tokens=norm.split(" ").filter(Boolean);
-  if(tokens.length>1 && tokens[0].length>=4) variants.push(tokens[0]);
+  // Put the clean football name early because free API quota matters.
+  if(core && core.toLowerCase()!==raw.toLowerCase())variants.push(core);
+  if(norm && norm.toLowerCase()!==raw.toLowerCase() && norm!==core)variants.push(norm);
 
   const aliases={
     "wolverhampton wanderers":["Wolverhampton","Wolves"],
@@ -258,39 +271,53 @@ function teamSearchVariants(requested){
     "brighton and hove albion":["Brighton"],
     "west ham united":["West Ham"],
     "lokomotiv moscow":["Lokomotiv Moskva","Lokomotiv Moscow"],
-    "krylia sovetov samara":["Krylya Sovetov","Krylia Sovetov"]
+    "krylia sovetov samara":["Krylya Sovetov","Krylia Sovetov"],
+    "se palmeiras sp":["Palmeiras","SE Palmeiras"],
+    "palmeiras sp":["Palmeiras"],
+    "levante ud":["Levante"],
+    "athletic club bilbao":["Athletic Bilbao","Athletic Club"],
+    "ldu quito":["LDU Quito","Liga de Quito","LDU"]
   };
-  for(const a of (aliases[norm]||[])) variants.push(a);
 
-  return [...new Set(variants.map(x=>x.trim()).filter(Boolean))].slice(0,4);
+  for(const key of [norm,core]){
+    for(const a of (aliases[key]||[]))variants.push(a);
+  }
+
+  const coreTokens=core.split(" ").filter(Boolean);
+  if(coreTokens.length>1 && coreTokens[0].length>=4)variants.push(coreTokens[0]);
+
+  return [...new Set(variants.map(x=>x.trim()).filter(Boolean))].slice(0,6);
 }
 async function resolveTeam(requested,{force=false}={}){
   const variants=teamSearchVariants(requested);
-  const all=[], seen=new Set();
-  let lastQuota=null,checkedAt=isoNow();
+  const all=[],seen=new Set();
+  let lastQuota=null,checkedAt=isoNow(),tried=[];
 
-  for(let i=0;i<variants.length;i++){
-    const q=variants[i];
+  for(const q of variants){
+    tried.push(q);
     const result=await apiFootball("/teams",{search:q},{cacheMs:24*3600e3,force});
     lastQuota=result.quota;checkedAt=result.fetchedAt;
+
     for(const x of (result.data.response||[])){
       const id=x.team?.id;
       if(!id||seen.has(id))continue;
       seen.add(id);
+      const apiName=x.team?.name||"";
+      const score=Math.max(...variants.map(v=>teamSimilarity(v,apiName)));
       all.push({
-        id,name:x.team?.name||"",country:x.team?.country||"",logo:x.team?.logo||"",
-        score:teamSimilarity(requested,x.team?.name||""),
-        foundBy:q
+        id,name:apiName,country:x.team?.country||"",logo:x.team?.logo||"",
+        score,foundBy:q
       });
     }
     all.sort((a,b)=>b.score-a.score);
-    if(all[0]?.score>=0.65) break;
+    if(all[0]?.score>=0.82)break;
   }
+
   const best=all.sort((a,b)=>b.score-a.score)[0]||null;
   return {
     requested,best,alternatives:all.slice(1,4),
     confidence:best?best.score:0,
-    searchVariantsTried:variants.slice(0,Math.max(1,variants.findIndex(v=>v===best?.foundBy)+1)),
+    searchVariantsTried:tried,
     quota:lastQuota,checkedAt
   };
 }
@@ -390,6 +417,17 @@ function lastQuota(...items){
   for(let i=flat.length-1;i>=0;i--) if(flat[i].quota) return flat[i].quota;
   return null;
 }
+function compactResolvedTeam(r){
+  return {
+    id:r?.best?.id||null,
+    name:r?.best?.name||"",
+    country:r?.best?.country||"",
+    confidence:Number(r?.confidence||0),
+    requested:r?.requested||"",
+    searchVariantsTried:Array.isArray(r?.searchVariantsTried)?r.searchVariantsTried:[]
+  };
+}
+
 async function buildAuthenticityGate(fixtureText,round){
   const parsed=parseFixtureTeams(fixtureText);
   if(!parsed){
@@ -405,12 +443,13 @@ async function buildAuthenticityGate(fixtureText,round){
   const home=await resolveTeam(parsed.home,{force:false});
   const away=await resolveTeam(parsed.away,{force:false});
   const warnings=[];
-  if(!home.best||home.confidence<0.42) warnings.push(`Home team resolution is uncertain: "${parsed.home}".`);
-  if(!away.best||away.confidence<0.42) warnings.push(`Away team resolution is uncertain: "${parsed.away}".`);
+  if(!home.best||home.confidence<0.42) warnings.push(`Home team resolution is uncertain: "${parsed.home}". Tried: ${(home.searchVariantsTried||[]).join(" → ")}.`);
+  if(!away.best||away.confidence<0.42) warnings.push(`Away team resolution is uncertain: "${parsed.away}". Tried: ${(away.searchVariantsTried||[]).join(" → ")}.`);
   if(!home.best||!away.best){
     return {
       status:"FAILED",checkedAt:isoNow(),warnings,requested:parsed,
-      resolved:{home,away},fixture:null,squads:null,injuries:[],transfers:[],confirmedLineups:false,
+      resolved:{home:compactResolvedTeam(home),away:compactResolvedTeam(away)},
+      fixture:null,squads:null,injuries:[],transfers:[],confirmedLineups:false,
       quota:lastQuota(home,away)
     };
   }
@@ -454,8 +493,8 @@ async function buildAuthenticityGate(fixtureText,round){
     checkedAt:isoNow(),
     requested:parsed,
     resolved:{
-      home:{id:home.best.id,name:home.best.name,country:home.best.country,confidence:home.confidence},
-      away:{id:away.best.id,name:away.best.name,country:away.best.country,confidence:away.confidence}
+      home:{id:home.best.id,name:home.best.name,country:home.best.country,confidence:home.confidence,requested:home.requested,searchVariantsTried:home.searchVariantsTried},
+      away:{id:away.best.id,name:away.best.name,country:away.best.country,confidence:away.confidence,requested:away.requested,searchVariantsTried:away.searchVariantsTried}
     },
     fixture,
     squads:{
@@ -2079,12 +2118,12 @@ Do not add markdown or commentary outside the JSON.`;
 
 app.get("/api/version",(req,res)=>{
   res.setHeader("Cache-Control","no-store");
-  res.json({ok:true,version:"3.9.0",protocol:"async-research-v2"});
+  res.json({ok:true,version:"4.0.0",protocol:"async-research-v2"});
 });
 
 app.get("/api/health",(req,res)=>{
   res.json({
-    ok:true,version:"3.9.0",
+    ok:true,version:"4.0.0",
     tavilyConfigured:Boolean(process.env.TAVILY_API_KEY),
     geminiConfigured:Boolean(process.env.GEMINI_API_KEY),
     apiFootballConfigured:Boolean(process.env.API_FOOTBALL_KEY),
@@ -2357,4 +2396,4 @@ app.use((req,res)=>{
   res.setHeader("Cache-Control","no-cache, no-store, must-revalidate");
   res.sendFile(path.join(__dirname,"public","index.html"));
 });
-app.listen(PORT,()=>console.log(`Football Fact-First Research v3.9 running on port ${PORT}`));
+app.listen(PORT,()=>console.log(`Football Fact-First Research v4.0 running on port ${PORT}`));
