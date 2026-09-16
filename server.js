@@ -1168,7 +1168,17 @@ async function reviewYoutubeHighlights(videos, gate){
   if(!videos.length){
     return {status:"UNAVAILABLE",reviewedAt:isoNow(),videos:[],summary:"No public YouTube highlight links were found by the scouting searches.",observations:[]};
   }
-  const key=requireEnv("GEMINI_API_KEY");
+  if(!process.env.GEMINI_API_KEY){
+    return {
+      status:"PARTIAL",reviewedAt:isoNow(),
+      videos:videos.map(v=>({title:v.title,url:v.url,side:v.side||"general"})),
+      summary:"Video links were found, but Gemini video review is not configured.",
+      observations:[],crossVideoPatterns:[],
+      warning:"Do not treat linked highlights as reviewed footage unless status is COMPLETE.",
+      errors:["GEMINI_API_KEY is not configured for direct YouTube visual review."]
+    };
+  }
+  const key=process.env.GEMINI_API_KEY;
   const preferred=process.env.GEMINI_VIDEO_MODEL||process.env.GEMINI_MODEL||"gemini-3.8-flash";
   const models=[preferred,"gemini-3.7-flash","gemini-3.6-flash","gemini-3.5-flash-lite"]
     .filter((x,i,a)=>x&&a.indexOf(x)===i);
@@ -2149,6 +2159,8 @@ async function geminiTextWithRetry({prompt,maxOutputTokens=9000,responseMimeType
   const fallbackModels=[configured,"gemini-3.7-flash","gemini-3.6-flash","gemini-3.5-flash-lite"]
     .filter((m,i,a)=>m&&a.indexOf(m)===i);
   const errors=[];
+  usageStart("gemini");
+
   for(const model of fallbackModels){
     for(let attempt=1;attempt<=3;attempt++){
       const response=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,{
@@ -2160,21 +2172,268 @@ async function geminiTextWithRetry({prompt,maxOutputTokens=9000,responseMimeType
         })
       });
       const text=await response.text();
+
       if(response.ok){
         const data=parseHttpJson(text,`Gemini ${model}`);
         const output=(data.candidates?.[0]?.content?.parts||[]).map(p=>p.text||"").join("").trim();
+        usageOk("gemini");
         return {model,output,attempt};
       }
-      const retryable=[429,500,502,503,504].includes(response.status);
+
       errors.push(`${model} attempt ${attempt}: HTTP ${response.status} ${text.slice(0,300)}`);
+      const quota429=response.status===429 && /quota|resource[_ ]?exhausted|rate.?limit/i.test(text);
+
+      // A quota 429 is not improved by hammering the same model three times.
+      // Move to the next model immediately, preserving free-tier requests.
+      if(quota429)break;
+
+      const retryable=[429,500,502,503,504].includes(response.status);
       if(!retryable)break;
       if(attempt<3){
-        const delay=[2500,6500,13000][attempt-1]+Math.floor(Math.random()*1200);
+        const delay=[1800,4200,8500][attempt-1]+Math.floor(Math.random()*900);
         await sleep(delay);
       }
     }
   }
-  throw new Error(`Gemini unavailable after automatic retries/fallbacks. ${errors.slice(-4).join(" | ")}`);
+
+  const err=new Error(`Gemini unavailable after automatic retries/fallbacks. ${errors.slice(-4).join(" | ")}`);
+  usageFail("gemini",err);
+  throw err;
+}
+
+
+function markPrimaryAnalysis(obj,provider,model,attempts=[]){
+  obj._primaryProvider=provider;
+  obj._primaryModel=model;
+  obj._primaryAttempts=attempts;
+  return obj;
+}
+
+async function groqPrimaryAnalyze(payload,model="openai/gpt-oss-120b",display="OpenAI GPT-OSS 120B"){
+  const key=requireEnv("GROQ_API_KEY");
+  usageStart("groq");
+  try{
+    const response=await fetch("https://api.groq.com/openai/v1/chat/completions",{
+      method:"POST",
+      headers:{"Content-Type":"application/json","Authorization":`Bearer ${key}`},
+      body:JSON.stringify({
+        model,temperature:0.15,max_completion_tokens:9000,
+        messages:[{role:"user",content:analysisPrompt(payload)}]
+      })
+    });
+    const txt=await response.text();
+    if(!response.ok)throw new Error(`${display} primary analysis failed (${response.status}): ${txt.slice(0,320)}`);
+    const d=parseHttpJson(txt,display);
+    const parsed=parseJsonObject(d.choices?.[0]?.message?.content||"",display);
+    usageOk("groq");
+    return markPrimaryAnalysis(parsed,"Groq",display);
+  }catch(err){usageFail("groq",err);throw err;}
+}
+
+async function cloudflarePrimaryAnalyze(payload,modelId,display){
+  const account=process.env.CLOUDFLARE_ACCOUNT_ID,token=process.env.CLOUDFLARE_AUTH_TOKEN;
+  if(!account||!token)throw new Error("Cloudflare Workers AI is not configured.");
+  usageStart("cloudflare");
+  try{
+    const response=await fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(account)}/ai/run/${modelId}`,{
+      method:"POST",
+      headers:{"Content-Type":"application/json","Authorization":`Bearer ${token}`},
+      body:JSON.stringify({
+        messages:[{role:"user",content:analysisPrompt(payload)}],
+        temperature:0.15,max_tokens:9000
+      })
+    });
+    const txt=await response.text();
+    if(!response.ok)throw new Error(`${display} primary analysis failed (${response.status}): ${txt.slice(0,320)}`);
+    const d=parseHttpJson(txt,display);
+    const out=d.result?.response ?? d.result?.text ?? d.result?.output_text ?? d.result ?? "";
+    const parsed=parseJsonObject(typeof out==="string"?out:JSON.stringify(out),display);
+    usageOk("cloudflare");
+    return markPrimaryAnalysis(parsed,"Cloudflare",display);
+  }catch(err){usageFail("cloudflare",err);throw err;}
+}
+
+async function openRouterPrimaryAnalyze(payload){
+  const key=requireEnv("OPENROUTER_API_KEY");
+  const model=process.env.OPENROUTER_PRIMARY_MODEL||"openrouter/free";
+  usageStart("openrouter");
+  try{
+    const response=await fetch("https://openrouter.ai/api/v1/chat/completions",{
+      method:"POST",
+      headers:{
+        "Content-Type":"application/json","Authorization":`Bearer ${key}`,
+        "HTTP-Referer":process.env.APP_PUBLIC_URL||"https://localhost/",
+        "X-Title":"Football Fact-First Research"
+      },
+      body:JSON.stringify({
+        model,temperature:0.15,max_tokens:9000,
+        response_format:{type:"json_object"},
+        messages:[{role:"user",content:analysisPrompt(payload)}]
+      })
+    });
+    const txt=await response.text();
+    if(!response.ok)throw new Error(`OpenRouter Free primary analysis failed (${response.status}): ${txt.slice(0,320)}`);
+    const d=parseHttpJson(txt,"OpenRouter Primary");
+    const parsed=parseJsonObject(d.choices?.[0]?.message?.content||"","OpenRouter Primary");
+    usageOk("openrouter");
+    return markPrimaryAnalysis(parsed,"OpenRouter",d.model||model);
+  }catch(err){usageFail("openrouter",err);throw err;}
+}
+
+function degradedPrimaryAnalysis(payload,attempts=[]){
+  const {fixture,gate,sources,videoReview,temporalGuard}=payload;
+  const fixtureOk=Boolean(gate?.fixture?.date);
+  const squadsOk=Boolean(gate?.squads?.home?.count && gate?.squads?.away?.count);
+  const sourceCount=Array.isArray(sources)?sources.length:0;
+  const videoOk=videoReview?.status==="COMPLETE";
+
+  const coverage=CHECKLIST.map(item=>{
+    let status="unavailable",note="Primary AI synthesis unavailable.";
+    if(item==="fixture_verification"){
+      status=fixtureOk?"complete":gate?.resolved?"partial":"unavailable";
+      note=fixtureOk?"Fixture and kickoff were verified.":"Fixture timing is not fully verified.";
+    }else if(item==="current_squads_authenticity"){
+      status=squadsOk?"complete":gate?.resolved?"partial":"unavailable";
+      note=squadsOk?"Current structured squads were returned.":"Current squad coverage is incomplete.";
+    }else if(item==="confirmed_lineups"){
+      status=gate?.confirmedLineups?"complete":"unavailable";
+      note=gate?.confirmedLineups?"Confirmed XIs are available.":"Confirmed XIs are not available.";
+    }else if(item==="injuries_suspensions"){
+      status=Array.isArray(gate?.injuries)?"partial":"unavailable";
+      note="Structured injury coverage may be incomplete.";
+    }else if(item==="recent_transfers"){
+      status=Array.isArray(gate?.transfers)&&gate.transfers.length?"complete":"partial";
+      note="Transfer check depends on round/provider coverage.";
+    }else if(item==="video_evidence"){
+      status=videoOk?"complete":(videoReview?.videos?.length?"partial":"unavailable");
+      note=videoOk?"Automated visual review completed.":"Video links may exist, but automated visual review did not complete.";
+    }else if(sourceCount>=8){
+      status="partial";
+      note="Fresh web evidence exists, but no primary AI provider was available to synthesize this category reliably.";
+    }
+    return {item,status,note};
+  });
+
+  return {
+    fixture,
+    fixtureVerified:fixtureOk,
+    verificationNote:fixtureOk?"Fixture verification succeeded, but primary AI synthesis was unavailable.":"Fixture and/or kickoff verification is incomplete.",
+    freshness:{
+      structuredCheckedAt:gate?.checkedAt||"",
+      fixtureDate:gate?.fixture?.date||"",
+      confirmedLineupsAvailable:Boolean(gate?.confirmedLineups),
+      freshnessNote:"Research sources were gathered, but no configured primary AI provider completed synthesis."
+    },
+    authenticityAssessment:{
+      status:gate?.status||"FAILED",
+      homeCurrentClubVerified:Boolean(gate?.resolved?.home?.name),
+      awayCurrentClubVerified:Boolean(gate?.resolved?.away?.name),
+      note:(gate?.warnings||[]).join(" ")||"Structured identity data was gathered."
+    },
+    staleClaimsRejected:[],
+    verifiedCurrentPlayersReferenced:[],
+    videoReviewSummary:videoOk?"Video review completed, but no text-analysis provider was available.":"Video review incomplete or unavailable.",
+    dataAnalysis:{
+      evidenceQualityScore:sourceCount>=12?55:sourceCount>=6?45:30,
+      structuredDataScore:squadsOk&&fixtureOk?70:squadsOk?55:35,
+      webEvidenceScore:Math.min(70,25+sourceCount*3),
+      videoEvidenceScore:videoOk?55:0,
+      contradictionRiskScore:75,
+      dataFreshnessScore:sourceCount?65:30,
+      keyPatterns:[],
+      keyContradictions:["Primary AI synthesis unavailable; sporting patterns were not inferred automatically."],
+      analysisNarrative:"Data gathering completed, but all configured primary AI analysts were unavailable or quota-limited. The app preserved the evidence instead of inventing a betting conclusion.",
+      marketScores:[]
+    },
+    dataCoverage:coverage,
+    matchProfile:{
+      squadAndLineups:"See structured authenticity data; no AI synthesis available.",
+      formAndOpponentStrength:"Not synthesized automatically.",
+      attackAndDefence:"Not synthesized automatically.",
+      shotsPossessionTerritory:"Not synthesized automatically.",
+      cornersWidthSetPieces:"Not synthesized automatically.",
+      disciplineReferee:"Not synthesized automatically.",
+      tacticsAndGameState:"Not synthesized automatically.",
+      contextRestMotivation:"Not synthesized automatically.",
+      h2hVenueWeatherVideo:"Not synthesized automatically."
+    },
+    marketScreen:[],
+    shortlist:[],
+    finalMarket:"UNRESOLVED",
+    runnerUp:"NONE",
+    classification:"UNRESOLVED / HIGH RISK",
+    whyFinal:"All configured primary AI analysis providers were unavailable or quota-limited. No market was invented.",
+    remainingDanger:"AI synthesis unavailable. Connect another analysis provider or wait for quota recovery.",
+    originalMarketComparison:"",
+    missingData:["Primary AI synthesis unavailable."],
+    antiBiasCheck:"No market was forced from incomplete AI coverage.",
+    roundConvergence:"No primary analysis available.",
+    sourceRefs:[],
+    _primaryProvider:"NONE",
+    _primaryModel:"No provider available",
+    _primaryAttempts:attempts
+  };
+}
+
+async function primaryAnalyzeWithFallback(payload){
+  const attempts=[];
+
+  if(process.env.GEMINI_API_KEY){
+    try{
+      const out=await geminiAnalyze(payload);
+      out._primaryProvider="Google";
+      out._primaryModel=out._geminiModelUsed||process.env.GEMINI_MODEL||"Gemini";
+      out._primaryAttempts=attempts;
+      return out;
+    }catch(err){
+      attempts.push(`Gemini: ${String(err?.message||err).slice(0,420)}`);
+    }
+  }
+
+  if(process.env.OPENROUTER_API_KEY){
+    try{
+      const out=await openRouterPrimaryAnalyze(payload);
+      out._primaryAttempts=attempts;
+      return out;
+    }catch(err){
+      attempts.push(`OpenRouter: ${String(err?.message||err).slice(0,420)}`);
+    }
+  }
+
+  if(process.env.GROQ_API_KEY){
+    const groqModels=[
+      ["openai/gpt-oss-120b","OpenAI GPT-OSS 120B"],
+      ["openai/gpt-oss-20b","OpenAI GPT-OSS 20B"]
+    ];
+    for(const [model,display] of groqModels){
+      try{
+        const out=await groqPrimaryAnalyze(payload,model,display);
+        out._primaryAttempts=attempts;
+        return out;
+      }catch(err){
+        attempts.push(`Groq ${display}: ${String(err?.message||err).slice(0,420)}`);
+      }
+    }
+  }
+
+  if(process.env.CLOUDFLARE_ACCOUNT_ID&&process.env.CLOUDFLARE_AUTH_TOKEN){
+    const cfModels=[
+      ["@cf/meta/llama-3.3-70b-instruct-fp8-fast","Meta Llama 3.3 70B"],
+      ["@cf/google/gemma-4-26b-a4b-it","Gemma 4 26B"],
+      ["@cf/nvidia/nemotron-3-120b-a12b","NVIDIA Nemotron 3 120B"]
+    ];
+    for(const [model,display] of cfModels){
+      try{
+        const out=await cloudflarePrimaryAnalyze(payload,model,display);
+        out._primaryAttempts=attempts;
+        return out;
+      }catch(err){
+        attempts.push(`Cloudflare ${display}: ${String(err?.message||err).slice(0,420)}`);
+      }
+    }
+  }
+
+  return degradedPrimaryAnalysis(payload,attempts);
 }
 
 async function geminiAnalyze(payload){
@@ -2210,18 +2469,19 @@ Do not add markdown or commentary outside the JSON.`;
 
 app.get("/api/version",(req,res)=>{
   res.setHeader("Cache-Control","no-store");
-  res.json({ok:true,version:"4.1.0",protocol:"async-research-v2"});
+  res.json({ok:true,version:"4.2.0",protocol:"async-research-v2"});
 });
 
 app.get("/api/health",(req,res)=>{
   res.json({
-    ok:true,version:"4.1.0",
+    ok:true,version:"4.2.0",
     tavilyConfigured:Boolean(process.env.TAVILY_API_KEY),
     geminiConfigured:Boolean(process.env.GEMINI_API_KEY),
     apiFootballConfigured:Boolean(process.env.API_FOOTBALL_KEY),
     groqConfigured:Boolean(process.env.GROQ_API_KEY),
     cloudflareConfigured:Boolean(process.env.CLOUDFLARE_ACCOUNT_ID&&process.env.CLOUDFLARE_AUTH_TOKEN),
     openRouterConfigured:Boolean(process.env.OPENROUTER_API_KEY),
+    anyPrimaryAiConfigured:Boolean(process.env.GEMINI_API_KEY||process.env.OPENROUTER_API_KEY||process.env.GROQ_API_KEY||(process.env.CLOUDFLARE_ACCOUNT_ID&&process.env.CLOUDFLARE_AUTH_TOKEN)),
     footballDataOrgConfigured:Boolean(process.env.FOOTBALL_DATA_ORG_KEY),
     theSportsDBConfigured:true,
     scoreBatConfigured:Boolean(process.env.SCOREBAT_TOKEN),
@@ -2271,7 +2531,8 @@ app.post("/api/discover",async(req,res)=>{
 
 app.post("/api/council-expand",async(req,res)=>{
   try{
-    requireEnv("GEMINI_API_KEY");
+    // Council uses any configured AI provider; Gemini is optional.
+
     const fixture=cleanFixture(req.body?.fixture);
     const existingMembers=Array.isArray(req.body?.existingMembers)?req.body.existingMembers:[];
     const targetSize=Math.max(existingMembers.length+1,Math.min(50,Number(req.body?.targetSize||existingMembers.length+5)));
@@ -2298,7 +2559,6 @@ async function executeResearchJob(body,progressId){
   const originalMarket=String(body?.originalMarket||"").trim().slice(0,180);
   const previousRounds=Array.isArray(body?.previousRounds)?body.previousRounds:[];
   requireEnv("TAVILY_API_KEY");
-  requireEnv("GEMINI_API_KEY");
   const councilSize=Math.max(1,Math.min(20,Number(body?.councilSize||8)));
 
   setResearchProgress(progressId,{percent:7,stage:"Fixture verification",stageNumber:2,totalStages:10,message:`Round ${round}: verifying team identities, competition, kickoff time and current fixture status.`});
@@ -2345,7 +2605,7 @@ async function executeResearchJob(body,progressId){
 
   const allScoutedLinks=flattenScoutLinks(webScout,videoScout);
   setResearchProgress(progressId,{percent:59,stage:"Data analysis",stageNumber:6,totalStages:10,message:`Analyzing ${sources.length} deduplicated sources, structured evidence, contradictions and every realistic market family.`});
-  const analysis=await geminiAnalyze({fixture,round,originalMarket,previousRounds,sources,gate,videoReview,fallbackEvidence,temporalGuard});
+  const analysis=await primaryAnalyzeWithFallback({fixture,round,originalMarket,previousRounds,sources,gate,videoReview,fallbackEvidence,temporalGuard});
 
   if(analysis.dataAnalysis && videoReview.status!=="COMPLETE"){
     analysis.dataAnalysis.videoEvidenceScore=0;
@@ -2488,4 +2748,4 @@ app.use((req,res)=>{
   res.setHeader("Cache-Control","no-cache, no-store, must-revalidate");
   res.sendFile(path.join(__dirname,"public","index.html"));
 });
-app.listen(PORT,()=>console.log(`Football Fact-First Research v4.1 running on port ${PORT}`));
+app.listen(PORT,()=>console.log(`Football Fact-First Research v4.2 running on port ${PORT}`));

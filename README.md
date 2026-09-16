@@ -1,4 +1,4 @@
-# Football Fact-First Research v4.1 — Head-to-Head Fixture Verification
+# Football Fact-First Research v4.2 — Primary AI Failover Router
 
 
 This version is designed specifically to prevent stale-player mistakes such as describing a footballer as being at an old club after a transfer.
@@ -470,3 +470,25 @@ UI wording is also corrected:
 - `BLOCKED CONVERGENCE` becomes `AI COUNCIL — NOT RUN`.
 - `BLOCKED BENCHMARK CONSENSUS` becomes `EXTERNAL BENCHMARKS — NOT RUN`.
 These are not disagreements; they are stages deliberately skipped until the fixture is verified.
+
+
+## v4.2 — Gemini quota is no longer a single point of failure
+
+The LDU Quito vs Palmeiras test reached the primary analysis stage and Gemini returned HTTP 429
+quota-exceeded responses across the configured Flash models. Previously, that aborted the entire fixture.
+
+v4.2 changes the primary analysis architecture:
+
+Gemini → OpenRouter Free → Groq → Cloudflare → evidence-preserving UNRESOLVED fallback.
+
+- Gemini quota 429 responses no longer retry the same model three times.
+- If Gemini is exhausted, the app immediately moves to another configured primary AI provider.
+- OpenRouter uses `openrouter/free` by default when OPENROUTER_API_KEY is configured.
+- Groq and Cloudflare are used automatically when their credentials are configured.
+- If every AI provider is unavailable, research does not crash. Data gathering, authenticity checks,
+  videos, source audit and external benchmarks remain available, while the sporting market is marked
+  UNRESOLVED rather than invented.
+- The UI shows exactly which provider/model performed the primary analysis and the failed fallback attempts.
+- Gemini is optional for text analysis; it remains the direct public-YouTube visual-review provider.
+
+For uninterrupted free-tier research, configure at least two independent AI providers.

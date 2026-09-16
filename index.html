@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#071923">
-<title>Football Fact-First Research v4.1</title>
+<title>Football Fact-First Research v4.2</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon-192.png">
 <style>
@@ -49,7 +49,7 @@
 </head>
 <body>
 <div class="app">
-<div class="top"><div class="brand"><h1>⚽ Football Fact-First Research <span class="pill VERIFIED">v4.1</span></h1><small>Head-to-head fixture verification • bookmaker-name resolver • clear NOT RUN states • async research</small></div><div class="badge" id="healthBadge">Checking engine…</div></div>
+<div class="top"><div class="brand"><h1>⚽ Football Fact-First Research <span class="pill VERIFIED">v4.2</span></h1><small>Primary AI failover router • Gemini quota protection • head-to-head verification • async research</small></div><div class="badge" id="healthBadge">Checking engine…</div></div>
 <div class="tabs"><button class="tab active" data-tab="session">Research Session</button><button class="tab" data-tab="postboard">POSTBOARD</button><button class="tab" data-tab="history">History</button><button class="tab" data-tab="settings">Setup</button></div>
 
 <section id="tab-session">
@@ -116,7 +116,7 @@ Leave blank for pure market discovery."></textarea></div>
 
 <section id="tab-settings" class="hidden">
 <div class="panel">
-<h2>Research engine setup <span class="pill VERIFIED">v4.1</span></h2><p class="tiny muted">v4.0 resolves bookmaker-style club names before fixture verification and keeps the live stage-by-stage tracker for every research round, including Round 2 and later. If you still see an older version after deploy, close the tab and reopen the Render URL.</p>
+<h2>Research engine setup <span class="pill VERIFIED">v4.2</span></h2><p class="tiny muted">v4.0 resolves bookmaker-style club names before fixture verification and keeps the live stage-by-stage tracker for every research round, including Round 2 and later. If you still see an older version after deploy, close the tab and reopen the Render URL.</p>
 <p>Add these Environment Variables in Render. Keep all keys on the server, never in the browser:</p>
 <ul>
 <li><code>API_FOOTBALL_KEY</code> — structured football facts, predictions and bookmaker odds.</li>
@@ -133,6 +133,7 @@ Leave blank for pure market discovery."></textarea></div>
 <div class="status" id="configStatus">Checking configuration…</div>
 <div class="actions"><button class="secondary" id="refreshHealth">Recheck Setup</button><button class="secondary" id="providerTest">Test API-Football Key</button></div>
 <div class="actions"><button class="secondary" id="refreshProviders">Refresh Provider / Quota Board</button></div>
+<div class="status warn" style="margin-top:12px"><strong>Important:</strong> Gemini is no longer a single point of failure. To keep receiving full predictions after Gemini free quota is exhausted, connect at least one backup primary AI provider — preferably <code>OPENROUTER_API_KEY</code>, or Groq / Cloudflare. If every AI provider is unavailable, the app will preserve the research and return <strong>UNRESOLVED</strong> instead of crashing or inventing a pick.</div>
 <div id="providerBoard" class="chartbox"><div class="chart-title">🔌 Provider & Quota Board</div><p class="tiny muted">Shows configured fallbacks and calls made by this Render server instance.</p></div>
 
 <div id="providerStatus" class="status hidden"></div>
@@ -144,7 +145,7 @@ Leave blank for pure market discovery."></textarea></div>
 </div>
 
 <script>
-const APP_VERSION="4.1.0";
+const APP_VERSION="4.2.0";
 const KEY="footballFactFirstResearch_v2";
 let state=loadState();let activeSession=null;
 function loadState(){try{return JSON.parse(localStorage.getItem(KEY))||{sessions:[]}}catch{return{sessions:[]}}}
@@ -180,11 +181,11 @@ async function checkHealth(){
  const versionOk=await checkAppVersion();
  try{
    const r=await fetch("/api/health",{cache:"no-store"}),d=await readJsonResponse(r,"Setup check");
-   const ok=versionOk&&d.tavilyConfigured&&d.geminiConfigured;
+   const ok=versionOk&&d.tavilyConfigured&&d.anyPrimaryAiConfigured;
    badge.textContent=ok?"Verified engine ready":"Setup needed";
    badge.style.color=ok?"var(--good)":"var(--warn)";
    box.className="status "+(ok?"good":"warn");
-   box.innerHTML=`Core: Tavily <strong>${d.tavilyConfigured?"✓":"missing"}</strong> • Gemini <strong>${d.geminiConfigured?"✓":"missing"}</strong><br><span class="tiny muted">Structured data: API-Football <strong>${d.apiFootballConfigured?"✓":"fallback mode"}</strong> • football-data.org <strong>${d.footballDataOrgConfigured?"✓":"not connected"}</strong> • TheSportsDB <strong>✓ free fallback</strong> • ScoreBat <strong>${d.scoreBatConfigured?"✓":"not connected"}</strong><br>AI Council: Groq <strong>${d.groqConfigured?"✓":"not connected"}</strong> • Cloudflare <strong>${d.cloudflareConfigured?"✓":"not connected"}</strong> • OpenRouter <strong>${d.openRouterConfigured?"✓":"not connected"}</strong></span>`;
+   box.innerHTML=`Core research: Tavily <strong>${d.tavilyConfigured?"✓":"missing"}</strong> • Primary AI Router <strong>${d.anyPrimaryAiConfigured?"✓":"no AI provider connected"}</strong><br><span class="tiny muted">Primary AI order: Gemini ${d.geminiConfigured?"✓":"—"} → OpenRouter ${d.openRouterConfigured?"✓":"—"} → Groq ${d.groqConfigured?"✓":"—"} → Cloudflare ${d.cloudflareConfigured?"✓":"—"}<br>Structured data: API-Football <strong>${d.apiFootballConfigured?"✓":"fallback mode"}</strong> • football-data.org <strong>${d.footballDataOrgConfigured?"✓":"not connected"}</strong> • TheSportsDB <strong>✓ free fallback</strong> • ScoreBat <strong>${d.scoreBatConfigured?"✓":"not connected"}</strong></span>`;
    return ok;
  }catch(e){badge.textContent="Server unavailable";box.className="status bad";box.textContent=e.message;return false}
 }
@@ -485,7 +486,9 @@ function evidenceQualityHtml(a){
   ["Contradiction Risk",d.contradictionRiskScore]
  ];
  return `<div class="chartbox">
-   <div class="chart-title">📈 Evidence Quality Analysis</div>
+   <div class="fixture-head"><div class="chart-title">📈 Evidence Quality Analysis</div><span class="pill ${a._primaryProvider==="NONE"?"CAUTION":"VERIFIED"}">${esc(a._primaryProvider&&a._primaryProvider!=="NONE"?`${a._primaryProvider} primary`:"NO PRIMARY AI")}</span></div>
+   <p class="tiny muted">Primary analyst: ${esc(a._primaryProvider||"unknown")} • ${esc(a._primaryModel||"unknown model")}</p>
+   ${(a._primaryAttempts||[]).length?`<details><summary>Primary AI failover attempts</summary>${a._primaryAttempts.map(x=>`<div class="tiny muted">${esc(x)}</div>`).join("")}</details>`:""}
    <div class="score-grid">${cards.map(([name,val])=>`<div class="score-card"><span class="tiny muted">${esc(name)}</span><div class="score-big">${Math.round(clamp100(val))}/100</div><div class="bar-track"><div class="bar-fill" style="width:${clamp100(val)}%"></div></div></div>`).join("")}</div>
    ${d.analysisNarrative?`<p class="tiny" style="margin-top:10px"><strong>What the analysis means:</strong> ${esc(d.analysisNarrative)}</p>`:""}
    ${(d.keyPatterns||[]).length?`<p class="tiny"><strong>Key patterns:</strong> ${esc(d.keyPatterns.join(" • "))}</p>`:""}
