@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#071923">
-<title>Football Fact-First Research v6.2</title>
+<title>Football Fact-First Research v6.3</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon-192.png">
 <style>
@@ -49,7 +49,7 @@
 </head>
 <body>
 <div class="app">
-<div class="top"><div class="brand"><h1>⚽ Football Fact-First Research <span class="pill VERIFIED">v6.2</span></h1><small>Football Intelligence Research Engine • Render-safe research • resilient retries • 100-brain council</small></div><div class="badge" id="healthBadge">Checking engine…</div></div>
+<div class="top"><div class="brand"><h1>⚽ Football Fact-First Research <span class="pill VERIFIED">v6.3</span></h1><small>Football Intelligence Research Engine • exact-kickoff rescue • research-only council fallback • resilient retries</small></div><div class="badge" id="healthBadge">Checking engine…</div></div>
 <div class="tabs"><button class="tab active" data-tab="session">Research Session</button><button class="tab" data-tab="postboard">POSTBOARD</button><button class="tab" data-tab="history">History</button><button class="tab" data-tab="settings">Setup</button></div>
 
 <section id="tab-session">
@@ -125,7 +125,7 @@ Leave blank for pure market discovery."></textarea></div>
 
 <section id="tab-settings" class="hidden">
 <div class="panel">
-<h2>Research engine setup <span class="pill VERIFIED">v6.2</span></h2><p class="tiny muted">v6.1 keeps the multi-search fleet but adds a strict relevance firewall, cleaner source scoring, rejected-source auditing, semantic council convergence and stronger external-prediction extraction. If you still see an older version after deploy, close the tab and reopen the Render URL.</p>
+<h2>Research engine setup <span class="pill VERIFIED">v6.3</span></h2><p class="tiny muted">v6.1 keeps the multi-search fleet but adds a strict relevance firewall, cleaner source scoring, rejected-source auditing, semantic council convergence and stronger external-prediction extraction. If you still see an older version after deploy, close the tab and reopen the Render URL.</p>
 <p>Add these Environment Variables in Render. Keep all keys on the server, never in the browser:</p>
 <ul>
 <li><code>API_FOOTBALL_KEY</code> — structured football facts, predictions and bookmaker odds.</li>
@@ -154,7 +154,7 @@ Leave blank for pure market discovery."></textarea></div>
 </div>
 
 <script>
-const APP_VERSION="6.2.0";
+const APP_VERSION="6.3.0";
 const KEY="footballFactFirstResearch_v2";
 let state=loadState();let activeSession=null;
 function loadState(){try{return JSON.parse(localStorage.getItem(KEY))||{sessions:[]}}catch{return{sessions:[]}}}
@@ -630,9 +630,11 @@ function councilHtml(round){
      <p class="tiny muted">Agent seats 0 • Available 0 • Unique models 0 • Specialist agents 0</p>
    </div>`;
  }
- const cls=conv==="HIGH"?"VERIFIED":(conv==="MEDIUM"||conv==="LOW")?"CAUTION":"FAILED";
+ const researchOnly=Boolean(c.researchOnly);
+ const cls=researchOnly?"CAUTION":conv==="HIGH"?"VERIFIED":(conv==="MEDIUM"||conv==="LOW")?"CAUTION":"FAILED";
  return `<div class="chartbox">
- <div class="fixture-head"><div><div class="chart-title">🧠 Independent AI Council</div><span class="tiny muted">Same evidence pack • bookmaker odds hidden</span></div><span class="pill ${cls}">${esc(conv)} CONVERGENCE</span></div>
+ <div class="fixture-head"><div><div class="chart-title">🧠 Independent AI Council</div><span class="tiny muted">Same evidence pack • bookmaker odds hidden</span></div><span class="pill ${cls}">${researchOnly?"RESEARCH ONLY":esc(conv)+" CONVERGENCE"}</span></div>
+ ${researchOnly?`<div class="status warn"><strong>Research-only council:</strong> ${esc(c.researchOnlyReason||"Exact pre-match timing has not been verified, so this consensus is evidence analysis only and is not released as a betting/value conclusion.")}</div>`:""}
  <p><strong>${conv==="INSUFFICIENT"?"Council status":"Council consensus"}:</strong> <span style="color:var(--gold)">${esc(agg.consensusMarket||"NO CONSENSUS")}</span>${agg.medianFairProbabilityPct!=null?` • median fair ${esc(Math.round(agg.medianFairProbabilityPct*10)/10)}%`:""}</p>${agg.leadingSingleModelMarket?`<p class="tiny"><strong>Single-model opinion only:</strong> ${esc(agg.leadingSingleModelMarket)}</p>`:""}
  <p class="tiny muted">${esc(agg.note||"")} • Agent seats ${esc(counts.agentSeats??members.length)} / requested ${esc(c.requestedAgentSeats??members.length)} • Available ${esc(counts.availableAgents??members.filter(x=>x.available).length)} • Unique underlying models/engines ${esc(agg.uniqueUnderlyingModels??counts.uniqueModels??"—")} • Specialist agents ${esc(counts.specialistAgents??0)} • Deterministic engines ${esc(counts.deterministicEngines??0)}</p>
  ${agg.uniqueModelConsensus?`<div class="status"><strong>Unique-model consensus:</strong> ${esc(agg.uniqueModelConsensus.market||"NO CONSENSUS")} • ${esc(agg.uniqueModelConsensus.convergence||"NONE")} • ${esc(agg.uniqueModelConsensus.count||0)}/${esc(agg.uniqueModelConsensus.uniqueModels||0)} underlying models/engines<br><span class="tiny"><strong>Agent-seat consensus:</strong> ${esc(agg.agentConsensus?.market||"NO CONSENSUS")} • ${esc(agg.agentConsensus?.convergence||"NONE")} • ${esc(agg.agentConsensus?.count||0)}/${esc(agg.agentConsensus?.availableAgents||0)} available agents</span></div>`:""}
@@ -656,7 +658,7 @@ function externalBenchmarksHtml(round){
    <div class="fixture-head">
      <div><div class="chart-title">🌐 External Prediction Benchmarks — ACTUAL PREDICTIONS</div>
      <span class="tiny muted">Exact/current fixture only • unrelated old links suppressed</span></div>
-     <span class="pill ${cons.status==="HIGH"?"VERIFIED":cons.status==="MEDIUM"?"CAUTION":"FAILED"}">${esc(cons.status||"NONE")} BENCHMARK CONSENSUS</span>
+     <span class="pill ${b.researchOnly?"CAUTION":cons.status==="HIGH"?"VERIFIED":cons.status==="MEDIUM"?"CAUTION":"FAILED"}">${b.researchOnly?"RESEARCH ONLY":esc(cons.status||"NONE")+" BENCHMARK CONSENSUS"}</span>
    </div>
    <p class="tiny muted">${esc(b.rule||"Benchmarks only.")}</p>
    ${api.available?`<div class="benchmark-card">
