@@ -1,4 +1,4 @@
-# Football Fact-First Research v6.0 — Football Intelligence Research Engine
+# Football Fact-First Research v6.1 — Evidence Quality Guard
 
 This release is a structural upgrade rather than another small patch. It is designed around the failures exposed during live testing: API quotas, provider outages, fixture-verification gaps, stale browser versions, and the risk of treating many specialist prompts as many independent models.
 
@@ -188,3 +188,8 @@ v6.0 changes the project from an API-led predictor into a research-first evidenc
 - The evidence warehouse can independently verify a future fixture date/kickoff when multiple independent sources agree.
 - All external searches/page reads use timeouts so a stalled provider does not freeze the whole research job.
 - Existing deterministic engine, provider circuit breakers and adaptive 100-agent AI council remain in place.
+
+
+## v6.1 — Evidence Quality Guard
+
+The first v6.0 live test proved the multi-search warehouse works, but it also exposed a serious quality issue: ambiguous team words polluted the source list (for example animal pages for “Lion” and unrelated “BG” pages). v6.1 adds a relevance firewall before and after page reading, decodes Bing redirects, balances source quotas across research questions, excludes rejected pages from synthesis, repairs identity scoring after independent fixture verification, separates single-source from multi-source market signals, improves semantic council consensus, and expands external prediction extraction across the full search fleet. Rejected URLs remain visible in the audit trail with a REJECTED label so the engine is transparent about what it discarded.

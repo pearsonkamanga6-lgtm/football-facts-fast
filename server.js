@@ -482,11 +482,54 @@ function significantTeamTokens(name){
   const stop=new Set(["fc","cf","sc","ac","afc","ec","se","ud","cd","ad","ca","club","sp","rj","mg","rs","pr","ba","go","df"]);
   return edgeCleanTeamName(name).split(" ").map(x=>x.toLowerCase()).filter(x=>x.length>=4&&!stop.has(x));
 }
-function textMentionsTeam(text,name){
-  const hay=normalizeTeamName(text).toLowerCase();
+function strictTeamTokens(name){
+  const edge=edgeCleanTeamName(name).split(" ").map(x=>x.toLowerCase()).filter(Boolean);
+  const stop=new Set(["fc","cf","sc","ac","afc","ec","se","ud","cd","ad","ca","club","sp","rj","mg","rs","pr","ba","go","df","ce","pe","rn","pb","pa","am","ma","mt","ms","al","es"]);
+  return edge.filter(x=>x.length>=3&&!stop.has(x));
+}
+function strictTextMentionsTeam(text,name){
+  const hay=` ${normalizeTeamName(text).toLowerCase()} `;
+  const core=strictTeamTokens(name);
+  if(!core.length)return false;
+  if(core.every(t=>hay.includes(t)))return true;
+  // Allow explicit aliases, but never collapse a multi-word club into an ambiguous
+  // one-word token such as "Lion", "BG", "City" or "United".
   for(const variant of teamSearchVariants(name)){
-    const toks=significantTeamTokens(variant);
-    if(toks.length&&toks.every(t=>hay.includes(t)))return true;
+    const vt=strictTeamTokens(variant);
+    if(!vt.length)continue;
+    if(core.length>=2 && vt.length<2)continue;
+    if(vt.every(t=>hay.includes(t)))return true;
+  }
+  return false;
+}
+function textMentionsTeam(text,name){
+  return strictTextMentionsTeam(text,name);
+}
+function taskRelevanceMode(category){
+  // Exact-fixture questions should mention both clubs. Team-profile questions may
+  // legitimately return one strong page per club, so they require either club.
+  if(["fixture","competition","lineups","h2h","weather","predictions","motivation","counterevidence","market_thresholds"].includes(category))return "both";
+  if(["official_home","squad_home"].includes(category))return "home";
+  if(["official_away","squad_away"].includes(category))return "away";
+  return "either";
+}
+function resultRelevantForTask(result,task,home,away){
+  const text=`${result?.title||""} ${result?.content||""} ${result?.url||""}`;
+  const h=strictTextMentionsTeam(text,home),a=strictTextMentionsTeam(text,away);
+  const mode=taskRelevanceMode(task?.category||"");
+  if(mode==="both")return h&&a;
+  if(mode==="home")return h;
+  if(mode==="away")return a;
+  return h||a;
+}
+function pageRelevantForCategories(text,categories,home,away){
+  const h=strictTextMentionsTeam(text,home),a=strictTextMentionsTeam(text,away);
+  for(const c of categories||[]){
+    const mode=taskRelevanceMode(c);
+    if(mode==="both"&&h&&a)return true;
+    if(mode==="home"&&h)return true;
+    if(mode==="away"&&a)return true;
+    if(mode==="either"&&(h||a))return true;
   }
   return false;
 }
@@ -1539,6 +1582,22 @@ async function googleHtmlSearch(query,maxResults=8){
     usage.success=(usage.success||0)+1;return out;
   }catch(err){usage.fail=(usage.fail||0)+1;usage.lastError=String(err?.message||err).slice(0,240);return [];}
 }
+function normalizeBingHref(href){
+  try{
+    const u=new URL(href,"https://www.bing.com");
+    if(/(^|\.)bing\.com$/i.test(u.hostname)){
+      let payload=u.searchParams.get("u")||"";
+      if(payload){
+        if(payload.startsWith("a1"))payload=payload.slice(2);
+        try{
+          const decoded=Buffer.from(payload.replace(/-/g,"+").replace(/_/g,"/"),"base64").toString("utf8");
+          if(/^https?:\/\//i.test(decoded))return decoded;
+        }catch{}
+      }
+    }
+    return u.href;
+  }catch{return href;}
+}
 async function bingHtmlSearch(query,maxResults=8){
   const usage=providerUsage.bingSearch||{};usage.calls=(usage.calls||0)+1;providerUsage.bingSearch=usage;
   try{
@@ -1550,7 +1609,7 @@ async function bingHtmlSearch(query,maxResults=8){
     $("li.b_algo").each((_,el)=>{
       if(out.length>=maxResults)return;
       const box=$(el),a=box.find("h2 a").first();
-      const row=simpleResult(a.text().trim(),a.attr("href")||"",box.find(".b_caption p").text().trim(),"bing");
+      const row=simpleResult(a.text().trim(),normalizeBingHref(a.attr("href")||""),box.find(".b_caption p").text().trim(),"bing");
       if(row&&!out.some(x=>x.url===row.url))out.push(row);
     });
     usage.success=(usage.success||0)+1;return out;
@@ -1579,12 +1638,12 @@ function stableHash(s){
   let h=2166136261>>>0;for(const ch of String(s||"")){h^=ch.charCodeAt(0);h=Math.imul(h,16777619);}return (h>>>0).toString(16);
 }
 function sourceKind(url,title="",query=""){
-  const d=sourceDomain(url),t=`${title} ${query}`.toLowerCase();
+  const d=sourceDomain(url),t=`${title} ${url}`.toLowerCase();
   if(/youtube\.com|youtu\.be/.test(d))return "video";
   if(/reddit\.com/.test(d))return "community";
   if(/(^|\.)x\.com$|twitter\.com|facebook\.com|instagram\.com|tiktok\.com/.test(d))return "social";
   if(/fifa\.com|uefa\.com|the-afc\.com|cafonline\.com|conmebol\.com|premierleague\.com|laliga\.com|bundesliga\.com|legaseriea\.it/.test(d))return "official";
-  if(/\bofficial\b|club website|league website/.test(t))return "official-candidate";
+  if(/\bofficial\b/.test(t)&&/football|soccer|fc\b|club|league|cup|team/.test(t))return "official-candidate";
   if(/espn|bbc|reuters|skysports|beinsports|goal\.com|theathletic/.test(d))return "news";
   if(/sofascore|flashscore|fotmob|whoscored|footystats|soccerway|worldfootball|transfermarkt/.test(d))return "stats";
   return "web";
@@ -1594,9 +1653,9 @@ function sourceReliability(kind){
 }
 function researchModeConfig(mode){
   const m=String(mode||"deep").toLowerCase();
-  if(m==="standard")return {name:"standard",maxTasks:14,providersPerTask:2,maxDiscovered:90,maxOpened:35,minTasksBeforeSaturation:10,saturationWindow:4};
-  if(m==="maximum")return {name:"maximum",maxTasks:32,providersPerTask:4,maxDiscovered:320,maxOpened:120,minTasksBeforeSaturation:20,saturationWindow:7};
-  return {name:"deep",maxTasks:24,providersPerTask:3,maxDiscovered:180,maxOpened:70,minTasksBeforeSaturation:15,saturationWindow:5};
+  if(m==="standard")return {name:"standard",maxTasks:14,providersPerTask:2,maxDiscovered:105,maxPerTask:6,maxOpened:35,minTasksBeforeSaturation:10,saturationWindow:4};
+  if(m==="maximum")return {name:"maximum",maxTasks:32,providersPerTask:4,maxDiscovered:360,maxPerTask:10,maxOpened:130,minTasksBeforeSaturation:20,saturationWindow:7};
+  return {name:"deep",maxTasks:24,providersPerTask:3,maxDiscovered:210,maxPerTask:8,maxOpened:75,minTasksBeforeSaturation:15,saturationWindow:5};
 }
 function makeResearchLedger(fixture,gate,round,mode="deep"){
   const home=gate?.requested?.home||gate?.resolved?.home?.name||"",away=gate?.requested?.away||gate?.resolved?.away?.name||"";
@@ -1665,48 +1724,97 @@ async function readPublicPage(url){
 }
 function contentFingerprint(text){return stableHash(String(text||"").toLowerCase().replace(/https?:\/\/\S+/g," ").replace(/[^a-z0-9 ]+/g," ").replace(/\s+/g," ").trim().slice(0,5000));}
 function warehouseSummary(entries,ledger,mode,saturationReached){
-  const opened=entries.filter(x=>x.opened).length,usable=entries.filter(x=>x.usable).length,domains=new Set(entries.map(x=>sourceDomain(x.url)).filter(Boolean)),families=new Set(entries.filter(x=>x.usable).map(x=>x.fingerprint).filter(Boolean));
-  const kinds={};for(const x of entries)kinds[x.kind]=(kinds[x.kind]||0)+1;
-  return {mode,discovered:entries.length,opened,usable,independentDomains:domains.size,independentContentFamilies:families.size,duplicatesRemoved:Math.max(0,usable-families.size),pageErrors:entries.filter(x=>x.openError).length,saturationReached:Boolean(saturationReached),kinds,ledgerComplete:ledger.filter(x=>x.status==="complete").length,ledgerPartial:ledger.filter(x=>x.status==="partial").length,ledgerUnavailable:ledger.filter(x=>x.status==="unavailable").length};
+  const relevant=entries.filter(x=>x.relevant!==false);
+  const opened=relevant.filter(x=>x.opened).length,usable=relevant.filter(x=>x.usable).length;
+  const domains=new Set(relevant.filter(x=>x.usable).map(x=>sourceDomain(x.url)).filter(Boolean));
+  const families=new Set(relevant.filter(x=>x.usable).map(x=>x.fingerprint).filter(Boolean));
+  const kinds={};for(const x of relevant.filter(x=>x.usable))kinds[x.kind]=(kinds[x.kind]||0)+1;
+  return {mode,discovered:entries.length,opened,usable,independentDomains:domains.size,independentContentFamilies:families.size,duplicatesRemoved:Math.max(0,usable-families.size),pageErrors:relevant.filter(x=>x.openError).length,saturationReached:Boolean(saturationReached),kinds,ledgerComplete:ledger.filter(x=>x.status==="complete").length,ledgerPartial:ledger.filter(x=>x.status==="partial").length,ledgerUnavailable:ledger.filter(x=>x.status==="unavailable").length};
 }
 async function buildResearchWarehouse({fixture,gate,round,mode="deep",progressId}){
-  const cfg=researchModeConfig(mode),ledger=makeResearchLedger(fixture,gate,round,mode),byUrl=new Map(),providerLog=[],novelty=[];let saturationReached=false;
+  const cfg=researchModeConfig(mode),ledger=makeResearchLedger(fixture,gate,round,mode),byUrl=new Map(),providerLog=[],novelty=[],rejected=[];let saturationReached=false;
+  const home=gate?.requested?.home||gate?.resolved?.home?.name||"";
+  const away=gate?.requested?.away||gate?.resolved?.away?.name||"";
   for(let i=0;i<ledger.length;i++){
     const task=ledger[i];
     setResearchProgress(progressId,{percent:20+Math.round(((i+1)/ledger.length)*24),stage:"Research fleet",stageNumber:4,totalStages:12,message:`Research question ${i+1}/${ledger.length}: ${task.question}`});
-    const beforeUrls=byUrl.size,beforeDomains=new Set([...byUrl.values()].map(x=>sourceDomain(x.url))).size;
+    const beforeUrls=byUrl.size,beforeDomains=new Set([...byUrl.values()].filter(x=>x.relevant!==false).map(x=>sourceDomain(x.url))).size;
     const groups=await searchFleet(task.query,{providersPerTask:cfg.providersPerTask,maxResultsPerProvider:7});
     providerLog.push({taskId:task.id,category:task.category,query:task.query,groups});
-    for(const group of groups)for(const r of group.results||[]){
-      if(byUrl.size>=cfg.maxDiscovered)break;
-      const u=safePublicUrl(r.url);if(!u)continue;
-      const existing=byUrl.get(u.href),kind=sourceKind(u.href,r.title,task.query);
-      const row=existing||{url:u.href,title:r.title||u.hostname,snippet:r.content||"",provider:r.provider||group.provider,discoveredBy:[],categories:[],opened:false,usable:false,kind,reliability:sourceReliability(kind)};
-      if(!row.discoveredBy.includes(task.query))row.discoveredBy.push(task.query);if(!row.categories.includes(task.category))row.categories.push(task.category);if(!row.snippet&&r.content)row.snippet=r.content;byUrl.set(u.href,row);
+    let addedForTask=0;
+    for(const group of groups){
+      for(const r of group.results||[]){
+        if(addedForTask>=cfg.maxPerTask)break;
+        if(!resultRelevantForTask(r,task,home,away)){
+          rejected.push({title:r.title||r.url||"result",url:r.url||"",provider:r.provider||group.provider,query:task.query,category:task.category,reason:"Search result did not contain the required club identity tokens."});
+          continue;
+        }
+        const u=safePublicUrl(r.url);if(!u)continue;
+        const existing=byUrl.get(u.href),kind=sourceKind(u.href,r.title,task.query);
+        const row=existing||{url:u.href,title:r.title||u.hostname,snippet:r.content||"",provider:r.provider||group.provider,discoveredBy:[],categories:[],opened:false,usable:false,relevant:true,kind,reliability:sourceReliability(kind)};
+        if(!row.discoveredBy.includes(task.query))row.discoveredBy.push(task.query);
+        if(!row.categories.includes(task.category))row.categories.push(task.category);
+        if(!row.snippet&&r.content)row.snippet=r.content;
+        if(!existing){
+          if(byUrl.size>=cfg.maxDiscovered)continue;
+          byUrl.set(u.href,row);addedForTask++;
+        }else byUrl.set(u.href,row);
+      }
     }
-    const taskRows=[...byUrl.values()].filter(x=>x.categories.includes(task.category)),domainCount=new Set(taskRows.map(x=>sourceDomain(x.url)).filter(Boolean)).size;
+    const taskRows=[...byUrl.values()].filter(x=>x.categories.includes(task.category)&&x.relevant!==false);
+    const domainCount=new Set(taskRows.map(x=>sourceDomain(x.url)).filter(Boolean)).size;
     task.results=taskRows.length;task.domains=domainCount;task.status=domainCount>=2?"complete":domainCount===1?"partial":"unavailable";
-    const afterDomains=new Set([...byUrl.values()].map(x=>sourceDomain(x.url))).size;novelty.push({urls:byUrl.size-beforeUrls,domains:afterDomains-beforeDomains});
+    const afterDomains=new Set([...byUrl.values()].filter(x=>x.relevant!==false).map(x=>sourceDomain(x.url))).size;
+    novelty.push({urls:byUrl.size-beforeUrls,domains:afterDomains-beforeDomains});
     if(i+1>=cfg.minTasksBeforeSaturation&&novelty.length>=cfg.saturationWindow&&novelty.slice(-cfg.saturationWindow).every(x=>x.urls<=1&&x.domains===0)){saturationReached=true;break;}
-    if(byUrl.size>=cfg.maxDiscovered)break;
   }
   const entries=[...byUrl.values()],picked=[],domainCounts=new Map();
-  for(const x of entries.sort((a,b)=>b.reliability-a.reliability||b.categories.length-a.categories.length)){if(picked.length>=cfg.maxOpened)break;const d=sourceDomain(x.url)||"",n=domainCounts.get(d)||0;if(n>=4)continue;domainCounts.set(d,n+1);picked.push(x);}
-  for(let i=0;i<picked.length;i+=5){
-    const batch=picked.slice(i,i+5);setResearchProgress(progressId,{percent:45+Math.round((Math.min(i+5,picked.length)/Math.max(1,picked.length))*12),stage:"Page reading",stageNumber:5,totalStages:12,message:`Opening and reading source pages ${Math.min(i+5,picked.length)}/${picked.length}.`});
-    const rows=await Promise.all(batch.map(x=>readPublicPage(x.url)));
-    rows.forEach((r,j)=>{const x=batch[j];x.opened=true;if(r.ok){x.usable=true;x.pageTitle=r.title||x.title;x.extractedText=r.content||"";x.contentLength=r.contentLength||0;x.fingerprint=contentFingerprint(x.extractedText||x.snippet);}else{x.openError=r.error||"Unreadable page";const fallback=String(x.snippet||"").trim();if(fallback.length>60){x.usable=true;x.extractedText=fallback;x.fingerprint=contentFingerprint(fallback);}}});
+  for(const x of entries.sort((a,b)=>b.reliability-a.reliability||b.categories.length-a.categories.length)){
+    if(picked.length>=cfg.maxOpened)break;const d=sourceDomain(x.url)||"",n=domainCounts.get(d)||0;if(n>=4)continue;domainCounts.set(d,n+1);picked.push(x);
   }
-  for(const x of entries)if(!x.usable&&String(x.snippet||"").trim().length>80){x.usable=true;x.extractedText=x.snippet;x.fingerprint=contentFingerprint(x.snippet);}
-  return {mode:cfg.name,ledger,entries,providerLog,summary:warehouseSummary(entries,ledger,cfg.name,saturationReached),createdAt:isoNow()};
+  for(let i=0;i<picked.length;i+=5){
+    const batch=picked.slice(i,i+5);
+    setResearchProgress(progressId,{percent:45+Math.round((Math.min(i+5,picked.length)/Math.max(1,picked.length))*12),stage:"Page reading",stageNumber:5,totalStages:12,message:`Opening and reading source pages ${Math.min(i+5,picked.length)}/${picked.length}.`});
+    const rows=await Promise.all(batch.map(x=>readPublicPage(x.url)));
+    rows.forEach((r,j)=>{
+      const x=batch[j];x.opened=true;
+      if(r.ok){
+        x.pageTitle=r.title||x.title;x.extractedText=r.content||"";x.contentLength=r.contentLength||0;
+        const combined=`${x.pageTitle} ${x.extractedText} ${x.snippet||""} ${x.url}`;
+        if(pageRelevantForCategories(combined,x.categories,home,away)){
+          x.usable=true;x.relevant=true;x.fingerprint=contentFingerprint(x.extractedText||x.snippet);
+        }else{
+          x.usable=false;x.relevant=false;x.rejectionReason="Opened page did not confirm the required club identity.";
+          rejected.push({title:x.pageTitle||x.title,url:x.url,provider:x.provider,query:(x.discoveredBy||[])[0]||"",category:(x.categories||[]).join(","),reason:x.rejectionReason});
+        }
+      }else{
+        x.openError=r.error||"Unreadable page";
+        const fallback=String(x.snippet||"").trim();
+        if(fallback.length>60&&pageRelevantForCategories(`${x.title} ${fallback} ${x.url}`,x.categories,home,away)){
+          x.usable=true;x.relevant=true;x.extractedText=fallback;x.fingerprint=contentFingerprint(fallback);
+        }
+      }
+    });
+  }
+  for(const x of entries){
+    if(!x.usable&&x.relevant!==false){
+      const fallback=String(x.snippet||"").trim();
+      if(fallback.length>80&&pageRelevantForCategories(`${x.title} ${fallback} ${x.url}`,x.categories,home,away)){
+        x.usable=true;x.relevant=true;x.extractedText=fallback;x.fingerprint=contentFingerprint(fallback);
+      }
+    }
+  }
+  const summary=warehouseSummary(entries,ledger,cfg.name,saturationReached);
+  summary.rejectedIrrelevant=rejected.length;summary.acceptedRelevant=entries.filter(x=>x.relevant!==false).length;
+  return {mode:cfg.name,ledger,entries,rejected,providerLog,summary,createdAt:isoNow()};
 }
 function warehouseSources(warehouse,max=44){
-  const seen=new Set(),out=[],ranked=(warehouse?.entries||[]).filter(x=>x.usable).sort((a,b)=>b.reliability-a.reliability||b.categories.length-a.categories.length||(b.contentLength||0)-(a.contentLength||0));
+  const seen=new Set(),out=[],ranked=(warehouse?.entries||[]).filter(x=>x.usable&&x.relevant!==false).sort((a,b)=>b.reliability-a.reliability||b.categories.length-a.categories.length||(b.contentLength||0)-(a.contentLength||0));
   for(const x of ranked){const family=x.fingerprint||x.url;if(seen.has(family))continue;seen.add(family);out.push({title:x.pageTitle||x.title||x.url,url:x.url,content:String(x.extractedText||x.snippet||"").slice(0,7000),score:x.reliability/100,published_date:"",provider:x.provider,kind:x.kind,categories:x.categories});if(out.length>=max)break;}
   return out;
 }
 function fixtureEvidenceFromWarehouse(fixtureText,gate,warehouse){
-  const home=gate?.requested?.home||"",away=gate?.requested?.away||"",rows=(warehouse?.entries||[]).filter(x=>x.usable),grouped=new Map();
+  const home=gate?.requested?.home||"",away=gate?.requested?.away||"",rows=(warehouse?.entries||[]).filter(x=>x.usable&&x.relevant!==false),grouped=new Map();
   for(const x of rows){
     const txt=`${x.title||""} ${x.snippet||""} ${x.extractedText||""}`;if(!textMentionsTeam(txt,home)||!textMentionsTeam(txt,away))continue;
     const d=sourceDomain(x.url);if(!d)continue;
@@ -1729,6 +1837,9 @@ function upgradeGateWithWarehouse(gate,fixtureText,warehouse){
   const home=gate?.requested?.home||gate?.resolved?.home?.name||"Home",away=gate?.requested?.away||gate?.resolved?.away?.name||"Away";
   const syn=syntheticWebFixture({homeId:gate?.resolved?.home?.id||null,awayId:gate?.resolved?.away?.id||null,homeName:home,awayName:away,date:e.date,kickoff:exact?e.kickoff:"",sources:e.sources,confidence:exact?0.97:Math.min(0.94,0.78+e.domains*0.05),provider:exact?"WAREHOUSE_WEB_TIME":"WAREHOUSE_WEB_DATE"});
   const next={...gate};next.fixture={id:syn.fixture.id,date:syn.fixture.date,timestamp:syn.fixture.timestamp,status:syn.fixture.status?.long||"",statusShort:syn.fixture.status?.short||"",venue:"",city:"",league:"",round:"",verification:syn._verification,verificationConfidence:syn._verificationConfidence,verificationSources:syn._verificationSources,dateOnly:syn._dateOnly};next.status=exact?"VERIFIED":"CAUTION";next.checkedAt=isoNow();
+  next.resolved=next.resolved||{};
+  if(next.resolved.home)next.resolved.home={...next.resolved.home,name:home,confidence:Math.max(Number(next.resolved.home.confidence||0),0.95),identityVerification:"WEB_FIXTURE_CONSENSUS"};
+  if(next.resolved.away)next.resolved.away={...next.resolved.away,name:away,confidence:Math.max(Number(next.resolved.away.confidence||0),0.95),identityVerification:"WEB_FIXTURE_CONSENSUS"};
   next.warnings=(next.warnings||[]).filter(x=>!/fixture verification did not complete|did not find this matchup|kickoff/i.test(String(x)));next.warnings.push(exact?`Exact kickoff independently verified from ${e.domains} web domain(s) in the research warehouse.`:`Fixture date independently verified from ${e.domains} web domain(s); exact kickoff clock time still needs confirmation.`);
   return next;
 }
@@ -1781,7 +1892,7 @@ function sourceDigest(sources){
 
 
 
-function deterministicDataEngine({fixture,gate,sources,videoReview,temporalGuard}){
+function deterministicDataEngine({fixture,gate,sources,videoReview,temporalGuard,researchWarehouse}){
   const domains=new Set((sources||[]).map(x=>sourceDomain(x.url)).filter(Boolean));
   const signals=[
     {key:"BTTS_YES",market:"Both Teams To Score — Yes",rx:[/both teams to score\s*(?:-|:)?\s*yes/i,/btts\s*(?:-|:)?\s*yes/i]},
@@ -1812,7 +1923,12 @@ function deterministicDataEngine({fixture,gate,sources,videoReview,temporalGuard
   const identityScore=Math.round((((gate?.resolved?.home?.confidence||0)+(gate?.resolved?.away?.confidence||0))/2)*100);
   const fixtureScore=gate?.fixture?(gate.fixture.verification==="API_FOOTBALL"?100:Math.round((gate.fixture.verificationConfidence||0.8)*100)):0;
   const squadCounts=[gate?.squads?.home?.count||0,gate?.squads?.away?.count||0];
-  const squadScore=Math.min(100,Math.round((Math.min(30,squadCounts[0])+Math.min(30,squadCounts[1]))/60*100));
+  const apiSquadScore=Math.min(100,Math.round((Math.min(30,squadCounts[0])+Math.min(30,squadCounts[1]))/60*100));
+  const whEntries=(researchWarehouse?.entries||[]).filter(x=>x.usable&&x.relevant!==false);
+  const webHomeSquadDomains=new Set(whEntries.filter(x=>(x.categories||[]).includes("squad_home")).map(x=>sourceDomain(x.url)).filter(Boolean)).size;
+  const webAwaySquadDomains=new Set(whEntries.filter(x=>(x.categories||[]).includes("squad_away")).map(x=>sourceDomain(x.url)).filter(Boolean)).size;
+  const webSquadScore=Math.min(90,(webHomeSquadDomains?35+Math.min(10,(webHomeSquadDomains-1)*5):0)+(webAwaySquadDomains?35+Math.min(10,(webAwaySquadDomains-1)*5):0));
+  const squadScore=Math.max(apiSquadScore,webSquadScore);
   const diversityScore=Math.min(100,domains.size*8);
   const videoScore=videoReview?.status==="COMPLETE"?70:videoReview?.videos?.length?20:0;
   const overall=Math.round(identityScore*.20+fixtureScore*.25+squadScore*.20+diversityScore*.25+videoScore*.10);
@@ -1823,7 +1939,7 @@ function deterministicDataEngine({fixture,gate,sources,videoReview,temporalGuard
     sourceDomains:domains.size,explicitMarketSignals:rows,
     strongestSignal:strongest,
     signalUsable:Boolean(temporalGuard?.bettingAllowed&&strongest&&strongest.supportingDomains>=3&&strongest.supportScore>=72),
-    note:strongest?"Signals count only explicit market wording found across independent source domains; they are not substitutes for full statistical distributions.":"No repeated explicit exact-market wording was detected across the gathered source snippets."
+    note:strongest?(strongest.supportingDomains>=2?"Signals count only explicit market wording found across independent source domains; they are not substitutes for full statistical distributions.":"An exact-market phrase was found on only one independent domain, so it is a weak single-source mention rather than multi-source evidence."):"No repeated explicit exact-market wording was detected across the gathered source snippets."
   };
 }
 function deterministicCouncilMember(payload){
@@ -1885,6 +2001,21 @@ function clampPct(v){
 function canonicalKey(s){
   return String(s||"").toUpperCase().replace(/[^A-Z0-9.+-]+/g,"_").replace(/^_+|_+$/g,"").replace(/_+/g,"_").slice(0,100);
 }
+function semanticCanonicalMarket(s){
+  const raw=String(s||"").trim(),k=canonicalKey(raw);
+  if(!raw||/UNRESOLVED|NO_PRE_MATCH|NO_BET|NONE/.test(k))return k||"UNRESOLVED";
+  const t=raw.toLowerCase().replace(/[—–]/g,"-");
+  if(/\bbtts\b/.test(t)||/both teams to score/.test(t))return /\bno\b/.test(t)?"BTTS_NO":"BTTS_YES";
+  let m=t.match(/over\s*(\d+(?:\.\d+)?)/);if(m&&/goal/.test(t))return `TOTAL_GOALS_OVER_${m[1]}`;
+  m=t.match(/under\s*(\d+(?:\.\d+)?)/);if(m&&/goal/.test(t))return `TOTAL_GOALS_UNDER_${m[1]}`;
+  m=t.match(/over\s*(\d+(?:\.\d+)?)/);if(m&&/corner/.test(t))return `TOTAL_CORNERS_OVER_${m[1]}`;
+  m=t.match(/under\s*(\d+(?:\.\d+)?)/);if(m&&/corner/.test(t))return `TOTAL_CORNERS_UNDER_${m[1]}`;
+  if(/home.*or.*draw|\b1x\b|home double chance/.test(t))return "HOME_DOUBLE_CHANCE_1X";
+  if(/away.*or.*draw|\bx2\b|away double chance/.test(t))return "AWAY_DOUBLE_CHANCE_X2";
+  if(/draw no bet/.test(t)&&/home/.test(t))return "HOME_DNB";
+  if(/draw no bet/.test(t)&&/away/.test(t))return "AWAY_DNB";
+  return k;
+}
 function councilEvidencePack({fixture,gate,sources,videoReview,fallbackEvidence,dataEngine}){
   return `FIXTURE:\n${fixture}\n\nSTRUCTURED CURRENT-FOOTBALL DATA:\n${structuredDigest(gate)}\n\nFALLBACK / CROSS-CHECK PROVIDERS:\n${JSON.stringify(fallbackEvidence||{},null,2)}\n\nFRESH WEB EVIDENCE:\n${sourceDigest(sources)}\n\nVIDEO REVIEW:\n${JSON.stringify(videoReview||{status:"UNAVAILABLE"},null,2)}`;
 }
@@ -1929,7 +2060,7 @@ function normalizeCouncilResult(provider,modelName,obj){
   return {
     provider,modelName,available:true,
     primaryMarket:unresolved?"UNRESOLVED":String(obj?.primaryMarket||"UNRESOLVED"),
-    canonicalMarketKey:unresolved?"UNRESOLVED":canonicalKey(obj?.canonicalMarketKey||obj?.primaryMarket||"UNRESOLVED"),
+    canonicalMarketKey:unresolved?"UNRESOLVED":semanticCanonicalMarket(obj?.canonicalMarketKey||obj?.primaryMarket||"UNRESOLVED"),
     marketFamily:String(obj?.marketFamily||""),
     fairProbabilityPct:clampPct(obj?.fairProbabilityPct),
     confidence:String(obj?.confidence||"LOW"),
@@ -1950,7 +2081,7 @@ async function geminiCouncilMember(payload){
   });
   const out=parseJsonObject(result.output,"Gemini");
   const normalized=normalizeCouncilResult("Google",`Gemini (${result.model})`,out);
-  normalized.retryAttempt=result.attempt;
+  normalized.retryAttempt=result.attempt;normalized.modelId=result.model;normalized.brainType="unique-model";
   return normalized;
 }
 async function groqCouncilMember(payload,model,display,specialistRole=""){
@@ -2012,7 +2143,7 @@ function aggregateVoteRows(rows){
   const available=rows.filter(x=>x.available);
   const resolved=available.filter(x=>x.canonicalMarketKey&&x.canonicalMarketKey!=="UNRESOLVED");
   const groups=new Map();
-  for(const r of resolved){const k=r.canonicalMarketKey;if(!groups.has(k))groups.set(k,[]);groups.get(k).push(r);}
+  for(const r of resolved){const k=semanticCanonicalMarket(r.canonicalMarketKey||r.primaryMarket);if(!groups.has(k))groups.set(k,[]);groups.get(k).push({...r,canonicalMarketKey:k});}
   const ranked=[...groups.entries()].map(([key,members])=>({
     canonicalMarketKey:key,market:members[0]?.primaryMarket||key,count:members.length,
     models:members.map(x=>x.modelName),medianFairProbabilityPct:median(members.map(x=>Number(x.fairProbabilityPct)).filter(Number.isFinite))
@@ -2123,7 +2254,7 @@ async function geminiSpecialistMember(payload,role,index){
     preferredModel:process.env.GEMINI_COUNCIL_MODEL||process.env.GEMINI_MODEL||"gemini-3.8-flash"
   });
   const out=normalizeCouncilResult("Google",`Gemini Specialist ${index+1}`,parseJsonObject(result.output,"Gemini specialist"));
-  out.specialistRole=role;out.brainType="specialist-agent";out.modelId="gemini-specialist";
+  out.specialistRole=role;out.brainType="specialist-agent";out.modelId=result.model;
   return out;
 }
 async function runInBatches(jobs,batchSize=5){
@@ -2354,7 +2485,47 @@ Return ONLY JSON:
   "warnings":[]
 }`;
 }
+function localBenchmarkPrediction(payload){
+  const text=String(payload?.content||"").replace(/\s+/g," ").trim();
+  const scope=`${payload?.title||""} ${payload?.url||""} ${text}`;
+  const fixtureMatched=strictTextMentionsTeam(scope,payload?.home||"")&&strictTextMentionsTeam(scope,payload?.away||"");
+  if(!fixtureMatched)return {fixtureMatched:false,predictionAvailable:false};
+
+  const expected=String(payload?.expectedDate||"").slice(0,10);
+  const expectedYear=expected.slice(0,4);
+  const hasExpected=!expected||scope.includes(expected)||scope.includes(expected.split("-").reverse().join("/"))||scope.includes(expected.split("-").reverse().join("-"))||(expectedYear&&scope.includes(expectedYear));
+  const stale=expectedYear && /\b20\d{2}\b/.test(scope) && !hasExpected;
+  if(stale)return {fixtureMatched:true,freshnessStatus:"STALE",predictionAvailable:false};
+
+  const candidates=[];
+  const add=(market,selection,key,index,raw)=>{if(!candidates.some(x=>x.canonicalMarketKey===key))candidates.push({market,selection,canonicalMarketKey:key,probabilityPct:null,correctScore:"",publishedOdds:"",_index:index,_raw:raw});};
+  const patterns=[
+    [/\b(?:prediction|tip|pick|selection|betting tip|recommended bet)\s*[:\-–—]?\s*(both teams to score\s*(?:-\s*)?yes|btts\s*yes)\b/i,"Both Teams To Score","Yes","BTTS_YES"],
+    [/\b(?:prediction|tip|pick|selection|betting tip|recommended bet)\s*[:\-–—]?\s*(both teams to score\s*(?:-\s*)?no|btts\s*no)\b/i,"Both Teams To Score","No","BTTS_NO"],
+    [/\b(?:prediction|tip|pick|selection|betting tip|recommended bet)\s*[:\-–—]?\s*(over\s*2\.5(?:\s*goals?)?)\b/i,"Total Goals","Over 2.5","TOTAL_GOALS_OVER_2.5"],
+    [/\b(?:prediction|tip|pick|selection|betting tip|recommended bet)\s*[:\-–—]?\s*(under\s*2\.5(?:\s*goals?)?)\b/i,"Total Goals","Under 2.5","TOTAL_GOALS_UNDER_2.5"],
+    [/\b(?:prediction|tip|pick|selection|betting tip|recommended bet)\s*[:\-–—]?\s*(home win|home team to win|1)\b/i,"1X2","Home Win","HOME_WIN"],
+    [/\b(?:prediction|tip|pick|selection|betting tip|recommended bet)\s*[:\-–—]?\s*(away win|away team to win|2)\b/i,"1X2","Away Win","AWAY_WIN"],
+    [/\b(?:prediction|tip|pick|selection|betting tip|recommended bet)\s*[:\-–—]?\s*(draw|x)\b/i,"1X2","Draw","DRAW"]
+  ];
+  for(const [rx,market,selection,key] of patterns){const m=rx.exec(text);if(m)add(market,selection,key,m.index,m[0]);}
+
+  const scoreRx=/\b(?:correct score|predicted score|score prediction)\s*[:\-–—]?\s*(\d{1,2})\s*[-:]\s*(\d{1,2})\b/i;
+  const sm=scoreRx.exec(text);if(sm){
+    const score=`${sm[1]}-${sm[2]}`;
+    candidates.push({market:"Correct Score",selection:score,canonicalMarketKey:`CORRECT_SCORE_${sm[1]}_${sm[2]}`,probabilityPct:null,correctScore:score,publishedOdds:"",_index:sm.index,_raw:sm[0]});
+  }
+  if(!candidates.length)return {fixtureMatched:true,freshnessStatus:hasExpected?"CURRENT":"UNKNOWN",predictionAvailable:false};
+
+  candidates.sort((a,b)=>a._index-b._index);
+  const primary={...candidates[0]};delete primary._index;delete primary._raw;
+  const others=candidates.slice(1).map(x=>{const y={...x};delete y._index;delete y._raw;return y;});
+  return {fixtureMatched:true,matchedFixture:`${payload.home} vs ${payload.away}`,fixtureDate:expected,freshnessStatus:hasExpected?"CURRENT":"UNKNOWN",predictionAvailable:true,primaryPrediction:primary,otherPredictions:others,explanationAvailable:false,rationaleSummary:[],sourceEvidenceSummary:"A labeled prediction was extracted directly from the readable source text by the local deterministic parser.",warnings:["No AI was required for this explicit labeled prediction. Source explanation is shown only when safely parsed separately."],parserModel:"LOCAL_EXPLICIT_PREDICTION_PARSER"};
+}
+
 async function parseBenchmarkPrediction(payload){
+  const local=localBenchmarkPrediction(payload);
+  if(local?.fixtureMatched&&local?.predictionAvailable&&local?.freshnessStatus!=="STALE")return local;
   try{
     const result=await geminiTextWithRetry({
       prompt:benchmarkParsePrompt(payload),
@@ -2367,8 +2538,8 @@ async function parseBenchmarkPrediction(payload){
     return parsed;
   }catch(err){
     return {
-      fixtureMatched:false,
-      freshnessStatus:"UNKNOWN",
+      fixtureMatched:Boolean(local?.fixtureMatched),
+      freshnessStatus:String(local?.freshnessStatus||"UNKNOWN"),
       predictionAvailable:false,
       primaryPrediction:null,
       otherPredictions:[],
@@ -2381,79 +2552,43 @@ async function parseBenchmarkPrediction(payload){
 }
 async function exactWebsitePrediction({name,domain,home,away,date}){
   const year=(date||zambiaDate(0)).slice(0,4);
-  const queries=[
-    `site:${domain} "${home}" "${away}" ${date||""} prediction`,
-    `site:${domain} "${home}" "${away}" ${year} tip forecast`
-  ];
+  const queries=[`site:${domain} "${home}" "${away}" ${date||""} prediction`,`site:${domain} "${home}" "${away}" ${year} tip forecast`];
   let searchResults=[];
   for(const q of queries){
-    try{
-      const r=await tavilySearch(q);
-      searchResults.push(...r.map(x=>({...x,_query:q})));
-    }catch{}
+    const groups=await searchFleet(q,{providersPerTask:4,maxResultsPerProvider:8});
+    for(const g of groups)for(const x of g.results||[])searchResults.push({...x,_query:q,_provider:g.provider});
   }
-  // Deduplicate and enforce both-team fixture identity before extracting pages.
   const seen=new Set();
   searchResults=searchResults.filter(r=>{
-    if(!r.url||seen.has(r.url))return false;
-    seen.add(r.url);return true;
+    if(!r.url)return false;const d=sourceDomain(r.url);if(!d||(!d.endsWith(domain)&&d!==domain))return false;
+    if(!strictTextMentionsTeam(`${r.title||""} ${r.content||""} ${r.url||""}`,home))return false;
+    if(!strictTextMentionsTeam(`${r.title||""} ${r.content||""} ${r.url||""}`,away))return false;
+    if(seen.has(r.url))return false;seen.add(r.url);return true;
   });
   const candidates=selectBenchmarkCandidates(searchResults,home,away,date);
-  if(!candidates.length){
-    return {
-      name,domain,status:"NO_EXACT_FIXTURE_SOURCE",found:false,
-      predictionAvailable:false,
-      explanationAvailable:false,
-      prediction:null,rationaleSummary:[],
-      sourceUrl:"",sourceTitle:"",
-      diagnostics:{queries,searchResultCount:searchResults.length}
-    };
-  }
+  if(!candidates.length)return {name,domain,status:"NO_EXACT_FIXTURE_SOURCE",found:false,predictionAvailable:false,explanationAvailable:false,prediction:null,rationaleSummary:[],sourceUrl:"",sourceTitle:"",diagnostics:{queries,searchResultCount:searchResults.length}};
 
-  const focus=`${home} vs ${away} ${date||""} prediction correct score 1X2 BTTS over under probability explanation`;
-  for(const c of candidates){
-    let extracted;
-    try{extracted=await tavilyExtractUrl(c.url,focus)}catch(err){extracted={ok:false,content:"",error:err.message,url:c.url};}
-    const pageContent=extracted.ok&&extracted.content ? extracted.content : `${c.title}\n${c.content}`;
-    const parsed=await parseBenchmarkPrediction({
-      siteName:name,home,away,expectedDate:date,url:c.url,title:c.title,content:pageContent
-    });
-    if(parsed.fixtureMatched && parsed.predictionAvailable && parsed.freshnessStatus!=="STALE"){
-      return {
-        name,domain,status:"PREDICTION_EXTRACTED",found:true,
-        predictionAvailable:true,
-        explanationAvailable:Boolean(parsed.explanationAvailable),
-        prediction:parsed.primaryPrediction||null,
-        otherPredictions:Array.isArray(parsed.otherPredictions)?parsed.otherPredictions:[],
-        rationaleSummary:Array.isArray(parsed.rationaleSummary)?parsed.rationaleSummary:[],
-        sourceEvidenceSummary:String(parsed.sourceEvidenceSummary||""),
-        fixtureDate:String(parsed.fixtureDate||""),
-        freshnessStatus:String(parsed.freshnessStatus||"UNKNOWN"),
-        sourceUrl:c.url,
-        sourceTitle:c.title,
-        sourcePublishedDate:c.published_date||"",
-        warnings:Array.isArray(parsed.warnings)?parsed.warnings:[],
-        parserModel:parsed.parserModel||"",
-        diagnostics:{queries,searchResultCount:searchResults.length,candidateCount:candidates.length,extracted:Boolean(extracted.ok)}
-      };
+  for(const c of candidates.slice(0,4)){
+    let pageContent=`${c.title}\n${c.content||""}`,extracted=false;
+    const direct=await readPublicPage(c.url);
+    if(direct.ok&&strictTextMentionsTeam(`${direct.title} ${direct.content}`,home)&&strictTextMentionsTeam(`${direct.title} ${direct.content}`,away)){
+      pageContent=`${direct.title}\n${direct.content}`;extracted=true;
+    }else{
+      try{const tv=await tavilyExtractUrl(c.url,`${home} vs ${away} ${date||""} prediction correct score 1X2 BTTS over under probability explanation`);if(tv.ok&&tv.content){pageContent=tv.content;extracted=true;}}catch{}
+    }
+    const parsed=await parseBenchmarkPrediction({siteName:name,home,away,expectedDate:date,url:c.url,title:c.title,content:pageContent});
+    if(parsed.fixtureMatched&&parsed.predictionAvailable&&parsed.freshnessStatus!=="STALE"){
+      if(parsed.primaryPrediction)parsed.primaryPrediction.canonicalMarketKey=semanticCanonicalMarket(parsed.primaryPrediction.canonicalMarketKey||parsed.primaryPrediction.market||parsed.primaryPrediction.selection);
+      return {name,domain,status:"PREDICTION_EXTRACTED",found:true,predictionAvailable:true,explanationAvailable:Boolean(parsed.explanationAvailable),prediction:parsed.primaryPrediction||null,otherPredictions:Array.isArray(parsed.otherPredictions)?parsed.otherPredictions:[],rationaleSummary:Array.isArray(parsed.rationaleSummary)?parsed.rationaleSummary:[],sourceEvidenceSummary:String(parsed.sourceEvidenceSummary||""),fixtureDate:String(parsed.fixtureDate||""),freshnessStatus:String(parsed.freshnessStatus||"UNKNOWN"),sourceUrl:c.url,sourceTitle:c.title,sourcePublishedDate:c.published_date||"",warnings:Array.isArray(parsed.warnings)?parsed.warnings:[],parserModel:parsed.parserModel||"",diagnostics:{queries,searchResultCount:searchResults.length,candidateCount:candidates.length,extracted}};
     }
   }
-  return {
-    name,domain,status:"NO_CURRENT_EXPLICIT_PREDICTION",found:true,
-    predictionAvailable:false,explanationAvailable:false,
-    prediction:null,otherPredictions:[],rationaleSummary:[],
-    sourceEvidenceSummary:"An exact or near-exact fixture page was found, but no current explicit prediction could be safely extracted.",
-    sourceUrl:candidates[0]?.url||"",sourceTitle:candidates[0]?.title||"",
-    freshnessStatus:"UNKNOWN",
-    warnings:["Unrelated or stale prediction links were suppressed instead of being shown as valid benchmarks."],
-    diagnostics:{queries,searchResultCount:searchResults.length,candidateCount:candidates.length}
-  };
+  return {name,domain,status:"NO_CURRENT_EXPLICIT_PREDICTION",found:true,predictionAvailable:false,explanationAvailable:false,prediction:null,otherPredictions:[],rationaleSummary:[],sourceEvidenceSummary:"An exact fixture page was found, but no current explicit prediction could be safely extracted from the readable page text.",sourceUrl:candidates[0]?.url||"",sourceTitle:candidates[0]?.title||"",freshnessStatus:"UNKNOWN",warnings:["Unrelated, generic or stale prediction links were suppressed."],diagnostics:{queries,searchResultCount:searchResults.length,candidateCount:candidates.length}};
 }
 function externalBenchmarkConsensus(websites=[]){
   const valid=(websites||[]).filter(x=>x.predictionAvailable&&x.prediction?.canonicalMarketKey);
   const groups=new Map();
   for(const x of valid){
-    const k=canonicalKey(x.prediction.canonicalMarketKey);
+    const k=semanticCanonicalMarket(x.prediction.canonicalMarketKey||x.prediction.market||x.prediction.selection);
     if(!groups.has(k))groups.set(k,[]);
     groups.get(k).push(x.name);
   }
@@ -2956,6 +3091,23 @@ function degradedPrimaryAnalysis(payload,attempts=[]){
   };
 }
 
+function normalizePrimaryAnalysisShape(analysis){
+  if(!analysis||typeof analysis!=="object")return analysis;
+  const scores=Array.isArray(analysis?.dataAnalysis?.marketScores)?analysis.dataAnalysis.marketScores:[];
+  let shortlist=Array.isArray(analysis.shortlist)?analysis.shortlist.filter(x=>x&&typeof x==="object"&&String(x.market||"").trim()):[];
+  if(!shortlist.length&&scores.length){
+    shortlist=scores.filter(x=>String(x.market||"").trim()).slice(0,4).map(x=>({
+      market:String(x.market),canonicalMarketKey:semanticCanonicalMarket(x.canonicalMarketKey||x.market),marketFamily:String(x.marketFamily||""),
+      fairProbabilityPct:x.fairProbabilityPct??null,probabilityConfidence:x.probabilityConfidence||"LOW",sportingSupportScore:x.sportingSupportScore??x.dataSupportScore??null,
+      contradictionRiskScore:x.contradictionRiskScore??null,dataSupportScore:x.dataSupportScore??null,oddsLookup:x.oddsLookup||{betTerms:[],selectionTerms:[]},
+      support:Array.isArray(x.support)?x.support:[],counterEvidence:Array.isArray(x.counterEvidence)?x.counterEvidence:[],survivesKillTest:true
+    }));
+  }
+  analysis.shortlist=shortlist.map(x=>({...x,canonicalMarketKey:semanticCanonicalMarket(x.canonicalMarketKey||x.market)}));
+  if(analysis.finalMarket&&analysis.finalMarket!=="UNRESOLVED")analysis.finalCanonicalMarketKey=semanticCanonicalMarket(analysis.finalMarket);
+  return analysis;
+}
+
 async function primaryAnalyzeWithFallback(payload){
   const attempts=[];
   const record=(name,err)=>{const msg=String(err?.message||err).slice(0,420);attempts.push(`${name}: ${msg}`);return msg;};
@@ -3018,12 +3170,12 @@ Do not add markdown or commentary outside the JSON.`;
 
 app.get("/api/version",(req,res)=>{
   res.setHeader("Cache-Control","no-store");
-  res.json({ok:true,version:"6.0.0",protocol:"adaptive-100-brain-v1"});
+  res.json({ok:true,version:"6.1.0",protocol:"adaptive-100-brain-v1"});
 });
 
 app.get("/api/health",(req,res)=>{
   res.json({
-    ok:true,version:"6.0.0",
+    ok:true,version:"6.1.0",
     tavilyConfigured:Boolean(process.env.TAVILY_API_KEY),
     builtinSearchEnabled:true,
     searchFleetProviders:["Google HTML best-effort","Bing HTML","DuckDuckGo HTML",...(process.env.TAVILY_API_KEY?["Tavily"]:[])],
@@ -3141,12 +3293,13 @@ async function executeResearchJob(body,progressId){
   const videoReview=await reviewYoutubeHighlights(videoCandidates,gate);
 
   const allScoutedLinks=[
-    ...(researchWarehouse.entries||[]).map(x=>({category:(x.categories||[]).join(",")||"web",title:x.pageTitle||x.title||x.url,url:x.url,published_date:"",score:x.reliability/100,query:(x.discoveredBy||[])[0]||"",kind:x.kind,provider:x.provider})),
-    ...flattenScoutLinks([],videoScout)
+    ...(researchWarehouse.entries||[]).map(x=>({category:(x.categories||[]).join(",")||"web",title:x.pageTitle||x.title||x.url,url:x.url,published_date:"",score:x.reliability/100,query:(x.discoveredBy||[])[0]||"",kind:x.kind,provider:x.provider,status:x.relevant===false?"REJECTED":"ACCEPTED",reason:x.rejectionReason||""})),
+    ...(researchWarehouse.rejected||[]).filter(x=>x.url).map(x=>({category:x.category||"web",title:x.title||x.url,url:x.url,published_date:"",score:0,query:x.query||"",kind:"rejected",provider:x.provider||"",status:"REJECTED",reason:x.reason||"Irrelevant to requested clubs."})),
+    ...flattenScoutLinks([],videoScout).map(x=>({...x,status:"SCOUTED"}))
   ];
-  const dataEngine=deterministicDataEngine({fixture,gate,sources,videoReview,temporalGuard});
+  const dataEngine=deterministicDataEngine({fixture,gate,sources,videoReview,temporalGuard,researchWarehouse});
   setResearchProgress(progressId,{percent:69,stage:"Data analysis",stageNumber:8,totalStages:12,message:`Running local deterministic checks plus AI synthesis across ${sources.length} deduplicated sources.`});
-  const analysis=await primaryAnalyzeWithFallback({fixture,round,originalMarket,previousRounds,sources,gate,videoReview,fallbackEvidence,temporalGuard,dataEngine});
+  const analysis=normalizePrimaryAnalysisShape(await primaryAnalyzeWithFallback({fixture,round,originalMarket,previousRounds,sources,gate,videoReview,fallbackEvidence,temporalGuard,dataEngine}));
 
   if(analysis.dataAnalysis && videoReview.status!=="COMPLETE"){
     analysis.dataAnalysis.videoEvidenceScore=0;
@@ -3203,8 +3356,8 @@ async function executeResearchJob(body,progressId){
   }
   const value=valueAudit(valueCandidates,oddsSnapshot);
 
-  const primaryKey=canonicalKey((analysis.shortlist||[]).find(x=>x.market===analysis.finalMarket)?.canonicalMarketKey||analysis.finalMarket);
-  const councilKey=agg.consensusCanonicalKey||"";
+  const primaryKey=semanticCanonicalMarket((analysis.shortlist||[]).find(x=>x.market===analysis.finalMarket)?.canonicalMarketKey||analysis.finalMarket);
+  const councilKey=semanticCanonicalMarket(agg.consensusCanonicalKey||agg.consensusMarket||"");
   const same=Boolean(councilKey)&&primaryKey===councilKey;
   const finalConvergence={
     status:!councilKey||["NONE","INSUFFICIENT","BLOCKED"].includes(agg.convergence)?"NO COUNCIL CONSENSUS":same?"PRIMARY + COUNCIL CONVERGED":"PRIMARY / COUNCIL DISAGREE",
@@ -3291,4 +3444,4 @@ app.use((req,res)=>{
   res.setHeader("Cache-Control","no-cache, no-store, must-revalidate");
   res.sendFile(path.join(__dirname,"public","index.html"));
 });
-app.listen(PORT,()=>console.log(`Football Fact-First Research v6.0 running on port ${PORT}`));
+app.listen(PORT,()=>console.log(`Football Fact-First Research v6.1 running on port ${PORT}`));

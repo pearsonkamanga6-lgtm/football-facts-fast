@@ -1,11 +1,38 @@
-FOOTBALL FACT-FIRST RESEARCH v5.0
+FOOTBALL FACT-FIRST RESEARCH v6.1 — EVIDENCE QUALITY GUARD
 
-For an existing GitHub deployment:
-1. Upload server.js and package.json to the repository ROOT.
-2. Open the public folder in GitHub.
-3. Upload public/index.html, public/service-worker.js and public/manifest.webmanifest there.
-4. Commit the changes.
-5. Let Render auto-deploy.
-6. Reopen the live Render URL and confirm the header says v5.0.
+For your existing GitHub + Render deployment:
 
-The 100-brain council is adaptive. It does not blindly fire 100 requests. It expands in waves and can stop early when independent underlying models agree.
+ROOT OF THE REPOSITORY
+1. Upload/replace: server.js
+2. Upload/replace: package.json
+
+PUBLIC FOLDER
+3. Open the public folder in GitHub.
+4. Upload/replace:
+   - index.html
+   - service-worker.js
+   - manifest.webmanifest
+5. The two icon PNG files do NOT need to be replaced for this update.
+
+DEPLOY
+6. Commit the changes.
+7. Let Render auto-deploy.
+8. Open the live Render URL again.
+9. Confirm the header says v6.1.
+
+WHAT v6.1 FIXES
+- Rejects irrelevant search results such as animal pages for “Lion” and unrelated “BG” pages.
+- Checks relevance again after opening a page, so a misleading search snippet cannot enter final evidence.
+- Keeps rejected URLs visible in the source audit but excludes them from analysis.
+- Decodes Bing redirect links before judging the real website/domain.
+- Balances the source budget across research questions instead of allowing noisy early queries to consume the whole source limit.
+- Uses independent web fixture verification to strengthen team-identity confidence when API-Football is unavailable.
+- Does not call a one-domain market phrase “multi-source”.
+- Normalizes equivalent market wording before AI-council convergence is calculated.
+- Counts repeated Gemini specialist prompts as one underlying Gemini model for unique-model consensus.
+- Repairs shortlist rendering when an AI returns market scores but an incomplete shortlist.
+- Searches external benchmark sites through the whole search fleet and reads the actual page.
+- Adds a local explicit-prediction parser so a clearly labelled website prediction can still be extracted even when Gemini text quota is unavailable.
+
+IMPORTANT
+The 100-brain council remains adaptive. It can use up to 100 agent seats, but unique-model consensus is kept separate from repeated specialist agents.
