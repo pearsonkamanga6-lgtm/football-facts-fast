@@ -1,25 +1,11 @@
-FOOTBALL FACT-FIRST RESEARCH v5.2 — 500+ DATA POINTS & RESILIENT WEB PREDICTIONS
+FOOTBALL FACT-FIRST RESEARCH v5.0
 
-WHAT'S FIXED IN v5.2:
-1. FIXED: "Football API has failed / No prediction outcome" bug.
-   API-Football is now completely optional and non-blocking. If API-Football is unavailable, expired, or out of daily quota, the engine automatically switches to live Google/Web search to verify the fixture, gather form/lineup data, and generate complete predictions.
-2. ADDED: 500+ Structured Football Data Points Engine.
-   Extracts, computes, and tracks 593 data points across 12 analytical dimensions before moving into analysis and presentation.
-3. THREE-STAGE PIPELINE:
-   - Stage 1: Data Gathering (Google/Web search, highlights scouting, 500+ data points extraction)
-   - Stage 2: Data Analysis (Statistical models, market screening, kill-tests, AI Council)
-   - Stage 3: Data Presentation (Clear prediction outcome, bar charts, donut charts, value bets)
-4. FIXED: Missing function errors (fixtureDetails, fixtureInjuries, recentTransfers) and unhandled odds exceptions.
+For an existing GitHub deployment:
+1. Upload server.js and package.json to the repository ROOT.
+2. Open the public folder in GitHub.
+3. Upload public/index.html, public/service-worker.js and public/manifest.webmanifest there.
+4. Commit the changes.
+5. Let Render auto-deploy.
+6. Reopen the live Render URL and confirm the header says v5.0.
 
-DEPLOYMENT INSTRUCTIONS (RENDER / GITHUB):
-1. In your GitHub repository root:
-   - Replace server.js
-   - Replace package.json
-   - Replace README.md
-2. In your public/ folder in GitHub:
-   - Replace public/index.html
-   - Replace public/manifest.webmanifest
-   - Replace public/service-worker.js
-   - Ensure public/icon-192.png and public/icon-512.png are present
-3. Commit and push changes. Render will auto-deploy.
-4. Open your live Render app URL and verify the header says v5.2.
+The 100-brain council is adaptive. It does not blindly fire 100 requests. It expands in waves and can stop early when independent underlying models agree.
