@@ -1,494 +1,152 @@
-# Football Fact-First Research v4.2 — Primary AI Failover Router
+# Football Fact-First Research v5.0 — Resilient 100-Brain Architecture
 
+This release is a structural upgrade rather than another small patch. It is designed around the failures exposed during live testing: API quotas, provider outages, fixture-verification gaps, stale browser versions, and the risk of treating many specialist prompts as many independent models.
 
-This version is designed specifically to prevent stale-player mistakes such as describing a footballer as being at an old club after a transfer.
+## Core architecture
 
-## New in v2
+The app now separates five layers:
 
-Before AI analysis is allowed to begin, the server:
+1. **Fixture / identity verification**
+   - API-Football team resolution and current squad checks when available.
+   - Bookmaker-style team-name aliases.
+   - API-Football head-to-head/date verification.
+   - football-data.org and TheSportsDB fallback checks.
+   - Fresh web fixture-date consensus when the structured API cannot match the fixture.
+   - A future fixture date can be marked `PREMATCH_WEB_VERIFIED` only when at least two independent verification sources agree. If the match is today and the clock time is unknown, betting conclusions remain blocked.
 
-1. Resolves both club names against API-Football.
-2. Loads each club's CURRENT registered squad (`/players/squads`).
-3. Finds the actual upcoming fixture between the two resolved team IDs.
-4. Loads the fixture details and checks whether starting XIs are genuinely confirmed.
-5. Loads fixture-specific injuries/suspensions.
-6. On Relearn rounds, also checks recent transfer activity.
-7. Only then runs Tavily live-web research and Gemini analysis.
-8. Gemini is explicitly forbidden from treating old web articles as proof of current club membership.
-9. If team/fixture identity fails, the server forcibly marks the match UNRESOLVED.
+2. **Local deterministic data engine**
+   - Always available and consumes no LLM quota.
+   - Scores team-identity coverage, fixture verification, squad coverage, source diversity and video support.
+   - Detects repeated *explicit* exact-market wording across independent source domains.
+   - Does not invent xG, tactical information or hidden statistics.
+   - Does not replace the full football analysis; it is an independent non-AI evidence layer.
 
-The result page shows:
-- Authenticity Gate: VERIFIED / CAUTION / FAILED
-- resolved club names and confidence
-- fixture date/competition
-- current squad counts
-- confirmed-lineup availability
-- current injuries/suspensions
-- API-Football quota remaining
-- stale player/club claims rejected
-- fresh web sources used
-- market shortlist + kill-the-pick test
+3. **Primary AI failover router**
+   - Default text-analysis preference conserves Gemini quota for video:
+     1. OpenRouter
+     2. Groq
+     3. Cloudflare Workers AI
+     4. Gemini text
+   - If every cloud AI is unavailable, research still completes and preserves the evidence rather than crashing or inventing a pick.
 
-## Recommended fixture format
+4. **Adaptive AI Council — ceiling 100 agent seats**
+   - Initial choices: 5, 8, 12, 20, 50 or 100.
+   - Large targets run in waves rather than firing 100 calls at once.
+   - The council can stop early when multiple independent underlying models/engines reach stable convergence.
+   - Agent-seat consensus and unique-model consensus are reported separately.
+   - Specialist agents cannot create fake confidence simply by repeating the same underlying model.
+   - A deterministic local engine is included as a separately labelled non-AI council member.
 
-`Home Team vs Away Team`
+5. **External benchmarks and odds last**
+   - External prediction sites run only after the internal sporting analysis and only for a verified pre-match fixture.
+   - Actual predictions, explanations and links are extracted where possible.
+   - Bookmaker prices are checked only after the sporting shortlist exists.
 
-Examples:
-- Real Madrid vs Barcelona
-- Arsenal vs Chelsea
+## Provider circuit breakers
 
-## Render Environment Variables
+v5.0 adds temporary provider health states:
 
-Add these under Render -> your football service -> Environment:
+- `READY`
+- `RATE_LIMITED`
+- `QUOTA_EXHAUSTED`
+- `TEMP_UNAVAILABLE`
+- `PLAN_BLOCKED`
+- `ERROR_COOLDOWN`
+
+When a provider returns a quota/rate-limit/outage error, the app temporarily stops hammering that provider and moves to another healthy provider. Gemini text and Gemini video have separate health channels because one can remain usable while the other is quota-limited.
+
+The Setup tab shows provider health, cooldown state, calls, successes, failures and API-Football quota information when available.
+
+## Multi-source fixture verification
+
+If API-Football cannot match the fixture:
+
+- football-data.org and TheSportsDB are checked when available;
+- two fresh web fixture searches are run;
+- only pages that mention both teams are considered;
+- future date candidates are grouped by independent source domain;
+- at least two independent verification votes must agree before a synthetic web-verified future fixture is accepted;
+- the UI lists the verification sources;
+- same-day fixtures without an exact kickoff time remain blocked.
+
+This keeps the Pre-Match Integrity Guard strict without making API-Football the single point of failure.
+
+## 100-brain council semantics
+
+“100 brains” means a ceiling of **100 agent seats**, not a claim that 100 completely different foundation models are available.
+
+The UI reports separately:
+
+- requested agent seats;
+- executed / available agents;
+- unique underlying models/engines;
+- specialist agents;
+- deterministic engines;
+- unique-model consensus;
+- agent-seat consensus;
+- adaptive early-stop reason.
+
+## Environment variables
+
+Required for live public-web research:
+
+- `TAVILY_API_KEY`
+
+Strongly recommended structured data:
 
 - `API_FOOTBALL_KEY`
-- `TAVILY_API_KEY`
+
+AI providers — connect as many as available; none is individually mandatory:
+
+- `OPENROUTER_API_KEY`
+- `GROQ_API_KEY`
+- `CLOUDFLARE_ACCOUNT_ID`
+- `CLOUDFLARE_AUTH_TOKEN`
 - `GEMINI_API_KEY`
-- optional `GEMINI_MODEL` (default: `gemini-3.8-flash`)
 
-Then save and redeploy.
+Optional data/video fallbacks:
 
-## API-Football free tier
+- `FOOTBALL_DATA_ORG_KEY`
+- `SCOREBAT_TOKEN`
 
-At the time this package was prepared, API-Football's official pricing page lists a $0 free plan with 100 requests/day, all endpoints, and no credit card required. The provider stops requests when quota is reached rather than overcharging.
+Optional:
 
-Because the free plan also has a per-minute rate limit, this app serializes structured-data calls with conservative spacing. A verified fixture can therefore take roughly 30–60 seconds before web/AI analysis finishes. This is intentional: freshness is more important than speed.
+- `APP_PUBLIC_URL`
+- `GEMINI_MODEL`
+- `GEMINI_VIDEO_MODEL`
+- `API_FOOTBALL_MIN_GAP_MS`
 
-## Relearn
+## GitHub update placement
 
-Relearn is not a simple rewording. It:
-- refreshes current squads/fixture information,
-- refreshes injuries and lineups,
-- adds a recent-transfer check,
-- searches with different query angles,
-- runs a fresh independent analysis round,
-- reports convergence/conflict with earlier rounds.
+Repository root:
 
-## Important
+- `server.js`
+- `package.json`
 
-No betting result is guaranteed.
-The app does not log in to, click, scrape, or place bets on BetPawa.
-You paste the fixture names; the research engine handles the evidence workflow.
+Inside `public/`:
 
+- `index.html`
+- `service-worker.js`
+- `manifest.webmanifest`
 
-## New in v2.1 — complete source audit
+The full package also contains the PWA icons.
 
-Every web and video-search query is retained. The final report contains:
-- sources used in final synthesis;
-- ALL unique links returned during scouting;
-- the query that discovered each link;
-- publication date when the search provider returns one.
+## Render
 
-This is intentionally more transparent than showing only the sources the AI finally cited.
+Build command:
 
-## New in v2.1 — actual highlight-video review
+```text
+npm install
+```
 
-The server searches for recent public YouTube highlights for both teams.
-Up to four selected public videos are passed to Gemini's video-understanding API.
+Start command:
 
-The review checks visible:
-- attacking routes and movement;
-- central vs wing play;
-- transitions/counter attacks;
-- crossing and set-piece patterns;
-- chance quality visible in the selected clips;
-- defensive errors/shape;
-- goalkeeper actions;
-- pressing, pace and physicality;
-- behavior while leading/trailing when observable.
+```text
+npm start
+```
 
-The app prominently warns that highlights are selective evidence, not full-match samples.
-It never invents numerical match statistics from video.
+After deployment, verify that the top of the app says **v5.0** before testing a fixture.
 
-No separate YouTube API key is required in v2.1 because the links are discovered through
-the existing live-web search layer and then passed directly to Gemini for video analysis.
-Public YouTube URL analysis is currently a Gemini API preview feature.
+## Important integrity rule
 
-
-## New in v2.2 — two ways to start
-
-### 1. I will give the games
-Paste fixtures normally.
-
-### 2. Find data-rich games for me
-The app scans upcoming fixtures and ranks candidates using:
-- league-season structured coverage flags;
-- lineup/statistics/player/injury/prediction coverage;
-- fresh public-source availability.
-
-Bookmaker odds are EXCLUDED from discovery scoring. This prevents the app from choosing a game merely because a favourite has a short price.
-
-The discovery engine rejects weak-public-data fixtures and shows a Data Availability Score.
-
-## New in v2.2 — every market family must be considered
-
-Before prices are visible, Gemini must register the status of:
-1X2, Double Chance, DNB, Asian Handicap, European Handicap, totals, team totals,
-BTTS, first-half/second-half goals, combinations, total/team/half corners,
-corner handicaps/Corner 1X2, cards/team cards, shots/SOT where data supports them,
-plus other evidence-supported bookmaker markets.
-
-Each family is shown as CONSIDERED, ELIMINATED or DATA_UNAVAILABLE.
-
-## New in v2.2 — Value Watch
-
-This preserves FACTS FIRST, ODDS LAST.
-
-1. Sporting evidence creates the exact-market shortlist.
-2. Each surviving market gets a cautious model fair-probability estimate.
-3. Only then does the server request pre-match bookmaker odds from API-Football.
-4. The server calculates the market break-even probability as 100 / decimal odds.
-5. A candidate is flagged POTENTIAL_VALUE only when the model fair probability exceeds
-   break-even by at least 5 percentage points.
-6. 2–5 percentage points is shown only as VALUE_WATCH, not a value declaration.
-
-The UI uses wording such as:
-
-"Whilst researching, I found this to be a potential value bet.
-The market may be underpricing this selection according to the current evidence model."
-
-This is deliberately not phrased as certainty. Fair probability is a model estimate, not ground truth.
-
-## Odds availability
-
-API-Football pre-match odds are used after analysis. Availability varies by fixture,
-competition and bookmaker. The app records the number of bookmakers, bet types and selections returned.
-If an exact sporting candidate cannot be mapped to a returned price, it is labelled UNPRICED_OR_UNMAPPED
-instead of inventing an odds comparison.
-
-
-## New in v2.3 — explicit research pipeline
-
-The two start modes stay unchanged:
-
-1. I will give the games.
-2. Find data-rich games for me.
-
-After a fixture enters the research engine, it now follows three mandatory stages.
-
-### Stage 1 — Data Gathering
-
-Collect as much relevant, current evidence as possible before forming a market opinion:
-current squad, fixture identity, injuries, suspensions, transfers, confirmed/predicted XI,
-rest/rotation/motivation, last 5/10, opponent strength, goals/xG/chances, shots/SOT,
-possession/territory, corners, width/crossing, set pieces, cards/referee, tactics/game state,
-H2H, venue/weather, recent video evidence and all source links.
-
-### Stage 2 — Data Analysis
-
-The model must analyze rather than simply repeat facts.
-
-It now returns:
-- overall evidence-quality score;
-- structured-data score;
-- public-web-evidence score;
-- video-evidence score;
-- freshness score;
-- contradiction-risk score;
-- key patterns;
-- key contradictions;
-- an analytical narrative;
-- individual market sporting-support, data-support and contradiction-risk scores.
-
-Opponent-strength distortion, data gaps and stale evidence must be taken into account.
-
-### Stage 3 — Presentation
-
-The phone/web interface now presents the completed analysis with:
-
-- horizontal bar chart comparing shortlisted markets;
-- donut/pie chart showing complete / partial / unavailable data coverage;
-- evidence-quality score cards/bars;
-- normal written explanation;
-- complete market-family screen;
-- video evidence;
-- Value Watch;
-- sources used and ALL sources scouted.
-
-The charts are generated directly in the browser without an external chart library, so the presentation
-stays lightweight and phone-friendly.
-
-Charts do not create the decision. They visualize the already-completed analysis.
-
-
-## v3.0 architecture
-
-DATA COLLECTION → DATA ANALYSIS → INDEPENDENT AI COUNCIL → DATA PRESENTATION →
-EXTERNAL PREDICTION BENCHMARKS → ODDS/VALUE LAST.
-
-Council models:
-- Gemini (core)
-- OpenAI GPT-OSS 120B via Groq
-- Qwen 3.8 27B via Groq
-- Meta Llama via Cloudflare Workers AI
-- OpenRouter Free Router fallback/diversity
-
-Every council model receives the same locked evidence pack with bookmaker odds hidden.
-Disagreement is preserved instead of forced.
-
-POSTBOARD summarizes:
-- completed fixtures
-- STRONG classifications
-- primary + council convergence
-- potential value alerts
-- unresolved matches
-- average evidence quality
-- each fixture's primary market, council consensus and value status
-
-External prediction benchmarks are shown only after independent internal analysis:
-API-Football Predictions, Forebet, PredictZ, WinDrawWin and FootyStats search results.
-
-Important: ChatGPT Plus is not used as an API inside this application.
-The OpenAI-family free council member is GPT-OSS 120B through Groq when GROQ_API_KEY is configured.
-
-
-## v3.1 hotfix
-Google documents HTTP 503 UNAVAILABLE as a transient overload condition and recommends exponential backoff. This build retries automatically and then falls back through Gemini 3.7 Flash, Gemini 3.6 Flash and Gemini 3.5 Flash-Lite before giving up.
-
-
-## v3.2 — actual external predictions, not link lists
-
-External benchmark sites are now processed as evidence sources rather than link directories.
-
-For Forebet, PredictZ, WinDrawWin and FootyStats the app now:
-1. searches for the exact fixture;
-2. rejects search results that do not match both teams;
-3. uses Tavily Extract to retrieve the actual page content;
-4. asks Gemini to extract ONLY an explicitly published prediction from that source;
-5. suppresses stale or unrelated match pages;
-6. displays:
-   - exact published prediction;
-   - market/selection;
-   - probability when the source publishes one;
-   - correct score when published;
-   - other explicit markets when present;
-   - a concise paraphrase of the source's explanation/trends/reasoning when available;
-   - the direct source URL;
-   - fixture date and freshness status.
-
-If the site has an exact fixture page but does not publish a clear prediction, the app says
-NO VALID PREDICTION rather than inferring one from statistics.
-
-External benchmark consensus is calculated only from successfully extracted current predictions.
-
-
-## v3.3 — malformed AI JSON recovery
-
-This hotfix addresses errors such as:
-
-Expected ',' or ']' after array element in JSON
-
-The research data was not necessarily wrong; the AI had returned a syntactically malformed JSON object.
-
-v3.3 now:
-- uses `jsonrepair` before rejecting an AI response;
-- repairs common missing commas, quotes, brackets and other JSON syntax defects;
-- applies the same repair path to primary analysis, AI Council, external-prediction parsing and video-review JSON;
-- if primary Gemini analysis is still malformed after repair, automatically asks for one fresh clean-JSON response;
-- no longer labels the entire session "complete" when one or more fixtures ended in an error.
-
-GitHub update requires:
-- server.js
-- package.json
-- public/index.html
-
-Render will run `npm install`, install jsonrepair and redeploy automatically.
-
-
-## v3.4 — fallback data and quota resilience
-
-Added:
-- football-data.org optional free fallback
-- TheSportsDB V1 free fallback (key 123)
-- ScoreBat optional limited free highlight feed
-- automatic fallback authenticity mode if API-Football is unavailable or quota-limited
-- fallback discovery for upcoming games
-- provider/quota dashboard
-
-## Expandable Council
-
-Initial council size: 5, 8, 12, or 20 agents.
-After research, use +5 AI Brains or +10 AI Brains repeatedly up to 50 agent seats.
-
-The app distinguishes UNIQUE MODELS from SPECIALIST AGENTS.
-It dynamically uses current zero-price OpenRouter models when configured, plus Gemini/Groq/Cloudflare models.
-If distinct models are exhausted, specialist agents provide independent lenses such as corners, goals, tactics, lineups, opponent strength and adversarial testing.
-
-50 is supported as an agent-seat ceiling, not a promise of 50 different model families.
-Large councils can hit free-provider quotas, so the UI warns before heavy expansion.
-
-
-## v3.5 critical integrity hotfix
-
-The Everton vs Wolverhampton test exposed several important issues.
-
-### 1. Pre-match temporal integrity
-The app now determines whether the verified fixture is:
-- PREMATCH
-- LIVE_OR_STARTED
-- POST_MATCH_AUDIT
-- UNKNOWN
-
-If the fixture has started/finished, or kickoff cannot be verified, the app blocks new betting recommendations,
-AI-council consensus, external prediction benchmarking and value pricing.
-
-This prevents post-match reports, goalscorers, red cards and actual results from leaking into what appears to be a pre-match prediction.
-
-### 2. Better API-Football team resolution
-If an exact team search is weak, the app automatically retries cleaned/alias variants such as:
-Everton FC -> Everton
-Wolverhampton Wanderers -> Wolverhampton / Wolves
-Lokomotiv Moscow -> Lokomotiv Moskva
-Krylia Sovetov Samara -> Krylya Sovetov
-
-Extra searches happen only when the first exact lookup is weak, to preserve quota.
-
-### 3. Gemini highlight-video repair
-@google/genai is upgraded to >= 2.0.0 to use the current Interactions API schema.
-The existing direct public YouTube URL video-review flow is retained.
-
-### 4. Council semantics
-One responding model is no longer labelled a council consensus.
-With fewer than two available council members, status is INSUFFICIENT and the app labels it as a single-model opinion.
-
-### 5. Stale-browser update protection
-index.html, manifest and service worker are now served with no-cache headers.
-The v3.5 service worker activates immediately so GitHub/Render updates stop leaving the old UI visible.
-
-
-## v3.6 — live research progress and Round 2 fix
-
-The Relearn / Fresh Round workflow now gives immediate visible feedback.
-
-Every round reports live progress from the server across ten stages:
-
-1. Starting research round
-2. Fixture verification
-3. Fallback cross-checks
-4. Fresh web scouting
-5. Video scouting / review
-6. Data analysis
-7. Independent AI Council
-8. External prediction benchmarks
-9. Odds & value audit
-10. Presentation
-
-Each fixture card displays:
-- current round number;
-- current stage and percentage;
-- current server-side activity/comment;
-- elapsed time;
-- the four most recent progress messages.
-
-The Relearn button is disabled while a round is already running, preventing accidental duplicate research.
-If Round 2 fails, the exact server error is shown instead of appearing to do nothing.
-
-The server exposes a temporary no-store endpoint:
-GET /api/research-progress/:progressId
-
-Progress records expire from memory after 45 minutes and do not add API usage.
-
-
-## v3.7 — asynchronous research jobs
-
-The error:
-
-Unexpected token '<', '<!DOCTYPE '... is not valid JSON
-
-usually means the browser expected JSON but received an HTML error page from a proxy/server instead.
-A long multi-stage research request can be vulnerable to this class of infrastructure timeout.
-
-v3.7 changes the architecture:
-
-1. POST /api/research-start returns immediately with HTTP 202.
-2. The Node server continues the research job in the background.
-3. The browser polls /api/research-progress/:id for the live stage tracker.
-4. The browser polls /api/research-result/:id until the finished JSON result is available.
-5. The browser no longer keeps one multi-minute HTTP request open.
-
-This makes long Round 1 / Round 2 research much less vulnerable to Render/proxy HTML timeout pages.
-
-The browser also has a safe JSON reader. If any endpoint ever returns an HTML page,
-the user sees a clear infrastructure/provider message instead of a raw JSON parser exception.
-
-
-## v3.8 — mixed-version protection
-
-A partial deployment can leave a newer async server behind an older cached v3.0 browser UI.
-The old UI expects POST /api/research to return a complete round, while the newer server starts
-an asynchronous job. That mismatch can create an empty-looking "successful" round with 0 sources,
-0 evidence and invalid dates.
-
-v3.8 fixes this:
-- GET /api/version exposes the server release/protocol.
-- The browser checks its APP_VERSION against the server before research.
-- If they differ, Start Research is disabled and an Update Required message is shown.
-- The legacy POST /api/research endpoint now returns HTTP 409 CLIENT_UPDATE_REQUIRED instead of
-  returning an async acceptance object that old clients can mistake for completed research.
-
-This prevents mixed-version deployments from silently producing zero-data reports.
-
-
-## v3.9 fixes
-- Replaced API-Football's free-plan-incompatible `next` fixture parameter with a 90-day `from`/`to` window.
-- Video review retries multiple Gemini Flash models when one hits quota/rate limits.
-- Unreviewed video links now score 0 for video evidence.
-- If the Pre-Match Integrity Guard blocks betting, candidate markets and market charts are hidden.
-
-
-## v4.0 — bookmaker/database team-name resolver
-
-The LDU Quito vs SE Palmeiras SP test showed that the app could collect excellent web/video evidence
-but still fail fixture verification because a bookmaker-style club label did not match API-Football's team name.
-
-v4.0:
-- converts bookmaker labels such as `SE Palmeiras SP` into additional API search variants including `Palmeiras`;
-- strips common club/state affixes only at the edges of a team name;
-- scores API results against every generated alias, not only the raw bookmaker label;
-- keeps direct aliases for common problematic names;
-- fixes the UI bug where a successfully identified home team could display `Unresolved` with a non-zero confidence;
-- displays the exact name variants tried when resolution is weak.
-
-This is designed to reduce false FAILED authenticity gates without weakening the fixture-ID check.
-
-
-## v4.1 — root-cause fix for repeated fixture-verification errors
-
-The `Season field is required` error came from using `/fixtures` with a team/date-window combination
-that API-Football was rejecting for this account. v4.1 no longer uses that route for exact matchup verification.
-
-New verification order:
-1. Resolve both team IDs.
-2. Call `/fixtures/headtohead?h2h=HOME_ID-AWAY_ID&from=...&to=...`.
-   API-Football's current official guide says `h2h` is the only required parameter for this endpoint,
-   while `from` and `to` can narrow the date window.
-3. If no upcoming matchup is found, search the fresh web for the exact fixture date.
-4. Use `/fixtures?date=YYYY-MM-DD` and match the two resolved team IDs.
-5. If a provider errors, retain the resolved teams/squads and show the lookup detail rather than throwing away the whole authenticity gate.
-
-UI wording is also corrected:
-- `BLOCKED CONVERGENCE` becomes `AI COUNCIL — NOT RUN`.
-- `BLOCKED BENCHMARK CONSENSUS` becomes `EXTERNAL BENCHMARKS — NOT RUN`.
-These are not disagreements; they are stages deliberately skipped until the fixture is verified.
-
-
-## v4.2 — Gemini quota is no longer a single point of failure
-
-The LDU Quito vs Palmeiras test reached the primary analysis stage and Gemini returned HTTP 429
-quota-exceeded responses across the configured Flash models. Previously, that aborted the entire fixture.
-
-v4.2 changes the primary analysis architecture:
-
-Gemini → OpenRouter Free → Groq → Cloudflare → evidence-preserving UNRESOLVED fallback.
-
-- Gemini quota 429 responses no longer retry the same model three times.
-- If Gemini is exhausted, the app immediately moves to another configured primary AI provider.
-- OpenRouter uses `openrouter/free` by default when OPENROUTER_API_KEY is configured.
-- Groq and Cloudflare are used automatically when their credentials are configured.
-- If every AI provider is unavailable, research does not crash. Data gathering, authenticity checks,
-  videos, source audit and external benchmarks remain available, while the sporting market is marked
-  UNRESOLVED rather than invented.
-- The UI shows exactly which provider/model performed the primary analysis and the failed fallback attempts.
-- Gemini is optional for text analysis; it remains the direct public-YouTube visual-review provider.
-
-For uninterrupted free-tier research, configure at least two independent AI providers.
+A market is not allowed merely because web sources or video evidence exist. If the target fixture is live, finished, same-day with unknown kickoff time, or otherwise temporally ambiguous, the app blocks pre-match betting conclusions. Post-match result information must never be used to manufacture a pre-match prediction.

@@ -132,9 +132,47 @@ const providerUsage = {
   cloudflare:{calls:0,success:0,fail:0,lastError:""},
   openrouter:{calls:0,success:0,fail:0,lastError:""}
 };
+const providerHealth={
+  geminiText:{state:"READY",blockedUntil:0,lastReason:"",failures:0},
+  geminiVideo:{state:"READY",blockedUntil:0,lastReason:"",failures:0},
+  openrouter:{state:"READY",blockedUntil:0,lastReason:"",failures:0},
+  groq:{state:"READY",blockedUntil:0,lastReason:"",failures:0},
+  cloudflare:{state:"READY",blockedUntil:0,lastReason:"",failures:0}
+};
+function classifyProviderFailure(err){
+  const msg=String(err?.message||err||"");
+  if(/403|paid plan|billing|payment|upgrade/i.test(msg))return {state:"PLAN_BLOCKED",ms:12*3600e3};
+  if(/429|quota|resource[_ ]?exhausted|rate.?limit|too many requests/i.test(msg)){
+    const daily=/daily|requests per day|rpd|quota exceeded|current quota/i.test(msg);
+    return {state:daily?"QUOTA_EXHAUSTED":"RATE_LIMITED",ms:daily?6*3600e3:10*60e3};
+  }
+  if(/500|502|503|504|capacity|unavailable|timeout/i.test(msg))return {state:"TEMP_UNAVAILABLE",ms:2*60e3};
+  return {state:"ERROR_COOLDOWN",ms:60e3};
+}
+function tripProvider(name,err){
+  const h=providerHealth[name];if(!h)return;
+  const c=classifyProviderFailure(err);
+  h.state=c.state;h.blockedUntil=Date.now()+c.ms;h.lastReason=String(err?.message||err||"").slice(0,260);h.failures++;
+}
+function healProvider(name){
+  const h=providerHealth[name];if(!h)return;
+  h.state="READY";h.blockedUntil=0;h.lastReason="";
+}
+function providerCanCall(name){
+  const h=providerHealth[name];
+  if(!h)return true;
+  if(h.blockedUntil&&Date.now()<h.blockedUntil)return false;
+  if(h.blockedUntil&&Date.now()>=h.blockedUntil)healProvider(name);
+  return true;
+}
+function providerHealthSnapshot(){
+  const now=Date.now(),out={};
+  for(const [k,v] of Object.entries(providerHealth))out[k]={...v,blockedForSeconds:v.blockedUntil>now?Math.ceil((v.blockedUntil-now)/1000):0};
+  return out;
+}
 function usageStart(name){ if(providerUsage[name]) providerUsage[name].calls++; }
-function usageOk(name,extra={}){ if(providerUsage[name]){ providerUsage[name].success++; Object.assign(providerUsage[name],extra); } }
-function usageFail(name,err){ if(providerUsage[name]){ providerUsage[name].fail++; providerUsage[name].lastError=String(err?.message||err||"").slice(0,240); } }
+function usageOk(name,extra={}){ if(providerUsage[name]){ providerUsage[name].success++; Object.assign(providerUsage[name],extra); } if(providerHealth[name])healProvider(name); }
+function usageFail(name,err){ if(providerUsage[name]){ providerUsage[name].fail++; providerUsage[name].lastError=String(err?.message||err||"").slice(0,240); } if(providerHealth[name])tripProvider(name,err); }
 function providerConfigured(){
   return {
     apiFootball:Boolean(process.env.API_FOOTBALL_KEY),
@@ -366,36 +404,67 @@ function parseWebDateCandidates(text){
   }
   return [...new Set(out)];
 }
-async function locateFixtureDateFromWeb(fixtureText){
+function sourceDomain(url){
+  try{return new URL(url).hostname.replace(/^www\./,"").toLowerCase();}catch{return "";}
+}
+function significantTeamTokens(name){
+  const stop=new Set(["fc","cf","sc","ac","afc","ec","se","ud","cd","ad","ca","club","sp","rj","mg","rs","pr","ba","go","df"]);
+  return edgeCleanTeamName(name).split(" ").map(x=>x.toLowerCase()).filter(x=>x.length>=4&&!stop.has(x));
+}
+function textMentionsTeam(text,name){
+  const hay=normalizeTeamName(text).toLowerCase();
+  for(const variant of teamSearchVariants(name)){
+    const toks=significantTeamTokens(variant);
+    if(toks.length&&toks.every(t=>hay.includes(t)))return true;
+  }
+  return false;
+}
+async function locateFixtureDateFromWeb(fixtureText,homeName="",awayName=""){
   try{
-    const rows=await tavilySearch(`${fixtureText} exact fixture date kickoff time 2026`);
-    const today=Date.parse(zambiaDate(-1)+"T00:00:00Z");
-    const max=Date.parse(zambiaDate(120)+"T23:59:59Z");
-    const found=[];
-    for(const r of rows){
-      const candidates=parseWebDateCandidates(`${r.title||""} ${r.content||""} ${r.url||""}`);
-      for(const date of candidates){
+    const queries=[
+      `\"${homeName||fixtureText}\" vs \"${awayName||""}\" next match exact date kickoff schedule 2026`,
+      `${fixtureText} fixture date kickoff competition schedule 2026`
+    ];
+    const all=[];
+    for(const q of queries){
+      const rows=await tavilySearch(q);
+      for(const r of rows)if(!all.some(x=>x.url===r.url))all.push(r);
+    }
+    const today=Date.parse(zambiaDate(0)+"T00:00:00Z");
+    const max=Date.parse(zambiaDate(150)+"T23:59:59Z");
+    const grouped=new Map();
+    for(const r of all){
+      const txt=`${r.title||""} ${r.content||""}`;
+      if(homeName&&awayName && (!textMentionsTeam(txt,homeName)||!textMentionsTeam(txt,awayName)))continue;
+      const domain=sourceDomain(r.url);
+      if(!domain)continue;
+      for(const date of parseWebDateCandidates(txt)){
         const ts=Date.parse(date+"T12:00:00Z");
-        if(ts>=today&&ts<=max)found.push({date,url:r.url||"",title:r.title||""});
+        if(ts<today||ts>max)continue;
+        if(!grouped.has(date))grouped.set(date,new Map());
+        grouped.get(date).set(domain,{date,url:r.url||"",title:r.title||"",domain});
       }
     }
-    found.sort((a,b)=>String(a.date).localeCompare(String(b.date)));
-    return found[0]||null;
-  }catch{
-    return null;
-  }
+    const ranked=[...grouped.entries()].map(([date,m])=>({date,sources:[...m.values()],domainCount:m.size}))
+      .sort((a,b)=>b.domainCount-a.domainCount||String(a.date).localeCompare(String(b.date)));
+    const best=ranked[0]||null;
+    return best?{...best,confidence:best.domainCount>=3?0.95:best.domainCount>=2?0.88:0.58,queries}:null;
+  }catch{return null;}
 }
-async function findUpcomingFixture(homeId,awayId,{force=false,fixtureText=""}={}){
-  const from=zambiaDate(-1);
-  const to=zambiaDate(120);
+function syntheticWebFixture({homeId,awayId,homeName,awayName,date,sources=[],confidence=0.88,provider="WEB_CONSENSUS"}){
+  return {
+    fixture:{id:null,date:`${date}T00:00:00+02:00`,timestamp:null,status:{long:"Web-verified future date",short:"WEB"},venue:{}},
+    league:{name:"",country:"",season:null,round:""},
+    teams:{home:{id:homeId,name:homeName},away:{id:awayId,name:awayName}},
+    lineups:[],
+    _verification:provider,_verificationConfidence:confidence,_verificationSources:sources,_dateOnly:true
+  };
+}
+async function findUpcomingFixture(homeId,awayId,{force=false,fixtureText="",homeName="",awayName=""}={}){
+  const from=zambiaDate(-1),to=zambiaDate(150);
   let quota=null,checkedAt=isoNow(),errors=[];
-
-  // Official API-Football docs state that h2h is the only required parameter
-  // for /fixtures/headtohead; from/to can refine the date window.
   try{
-    const r=await apiFootball("/fixtures/headtohead",{
-      h2h:`${homeId}-${awayId}`,from,to
-    },{cacheMs:10*60e3,force});
+    const r=await apiFootball("/fixtures/headtohead",{h2h:`${homeId}-${awayId}`,from,to},{cacheMs:10*60e3,force});
     quota=r.quota;checkedAt=r.fetchedAt;
     const rows=(r.data.response||[]).filter(x=>{
       const h=x.teams?.home?.id,a=x.teams?.away?.id;
@@ -403,73 +472,46 @@ async function findUpcomingFixture(homeId,awayId,{force=false,fixtureText=""}={}
     });
     rows.sort((a,b)=>futureFixtureRank(a)-futureFixtureRank(b));
     const exact=rows.find(x=>{
-      const ts=Number(x?.fixture?.timestamp||0)*1000 || Date.parse(x?.fixture?.date||"");
-      return Number.isFinite(ts)&&ts>=Date.now()-6*60*60*1000;
-    })||rows[0]||null;
-    if(exact){
-      return {match:exact,quota,checkedAt,lookup:{method:"headtohead",from,to,count:rows.length},errors};
-    }
-  }catch(err){
-    errors.push(`headtohead: ${String(err?.message||err)}`);
-  }
+      const ts=Number(x?.fixture?.timestamp||0)*1000||Date.parse(x?.fixture?.date||"");
+      return Number.isFinite(ts)&&ts>=Date.now()-6*3600e3;
+    })||null;
+    if(exact)return {match:exact,quota,checkedAt,lookup:{method:"api-football-headtohead",from,to,count:rows.length},errors};
+  }catch(err){errors.push(`headtohead: ${String(err?.message||err)}`);}
 
-  // Second path: find a likely exact date from fresh web results, then use /fixtures?date=YYYY-MM-DD.
-  if(fixtureText){
-    const webDate=await locateFixtureDateFromWeb(fixtureText);
-    if(webDate?.date){
-      try{
-        const d=await fixtureByExactDate(homeId,awayId,webDate.date,{force:true});
-        if(d.match){
-          return {
-            match:d.match,quota:d.quota||quota,checkedAt:d.checkedAt,
-            lookup:{method:"web-date + fixtures-date",date:webDate.date,source:webDate.url||""},
-            errors
-          };
-        }
-      }catch(err){
-        errors.push(`date-fallback: ${String(err?.message||err)}`);
-      }
-    }
-  }
+  // Independent fallback providers + fresh-web date consensus.
+  let fd={available:false},ts={available:false},web=null;
+  try{[fd,ts,web]=await Promise.all([
+    footballDataFindFixture(homeName||fixtureText,awayName||""),
+    sportsDbFindFixture(homeName||fixtureText,awayName||""),
+    locateFixtureDateFromWeb(fixtureText,homeName,awayName)
+  ]);}catch(err){errors.push(`fallback-consensus: ${String(err?.message||err)}`);}
 
-  return {match:null,quota,checkedAt,lookup:{method:"headtohead+date-fallback",from,to},errors};
-}
-async function fixtureDetails(fixtureId,{force=false}={}){
-  const result=await apiFootball("/fixtures",{id:fixtureId,timezone:"Africa/Lusaka"},{cacheMs:2*60e3,force});
-  return {match:result.data.response?.[0]||null, quota:result.quota, checkedAt:result.fetchedAt};
-}
-async function fixtureInjuries(fixtureId,{force=false}={}){
-  const result=await apiFootball("/injuries",{fixture:fixtureId,timezone:"Africa/Lusaka"},{cacheMs:2*60e3,force});
-  const rows=(result.data.response||[]).map(x=>({
-    player:x.player?.name||"",
-    playerId:x.player?.id||null,
-    team:x.team?.name||"",
-    teamId:x.team?.id||null,
-    type:x.player?.type||x.type||"",
-    reason:x.player?.reason||x.reason||""
-  }));
-  return {rows,quota:result.quota,checkedAt:result.fetchedAt};
-}
-async function recentTransfers(teamId,{force=false}={}){
-  const result=await apiFootball("/transfers",{team:teamId},{cacheMs:6*3600e3,force});
-  const cut=Date.now()-1000*60*60*24*180;
-  const rows=[];
-  for(const entry of (result.data.response||[])){
-    const player=entry.player||{};
-    for(const t of (entry.transfers||[])){
-      const ts=Date.parse(t.date||"");
-      if(!Number.isFinite(ts)||ts<cut) continue;
-      rows.push({
-        player:player.name||"",
-        date:t.date||"",
-        type:t.type||"",
-        from:t.teams?.out?.name||"",
-        to:t.teams?.in?.name||""
-      });
-    }
+  const votes=new Map();
+  const vote=(date,label,source,weight=1)=>{
+    const d=String(date||"").slice(0,10);if(!/^20\d{2}-\d{2}-\d{2}$/.test(d))return;
+    if(!votes.has(d))votes.set(d,[]);votes.get(d).push({label,source,weight});
+  };
+  if(fd?.available)vote(fd.best?.date,"football-data.org",fd.best,1);
+  if(ts?.available)vote(ts.best?.date,"TheSportsDB",ts.best,1);
+  if(web?.date){
+    for(const src of web.sources||[])vote(web.date,`web:${src.domain}`,src,1);
   }
-  rows.sort((a,b)=>String(b.date).localeCompare(String(a.date)));
-  return {rows:rows.slice(0,20),quota:result.quota,checkedAt:result.fetchedAt};
+  const ranked=[...votes.entries()].map(([date,rows])=>({date,rows,weight:rows.reduce((n,x)=>n+x.weight,0),independent:new Set(rows.map(x=>x.label)).size}))
+    .sort((a,b)=>b.independent-a.independent||b.weight-a.weight||String(a.date).localeCompare(String(b.date)));
+  const best=ranked[0];
+  if(best&&best.independent>=2){
+    // Try once more to obtain an official API fixture ID on the agreed date.
+    try{
+      const d=await fixtureByExactDate(homeId,awayId,best.date,{force:true});
+      if(d.match)return {match:d.match,quota:d.quota||quota,checkedAt:d.checkedAt,lookup:{method:"consensus-date+api-date",date:best.date,votes:best.rows},errors};
+    }catch(err){errors.push(`api-date-after-consensus: ${String(err?.message||err)}`);}
+    const webSources=best.rows.map(x=>({provider:x.label,url:x.source?.url||"",title:x.source?.title||""}));
+    return {
+      match:syntheticWebFixture({homeId,awayId,homeName,awayName,date:best.date,sources:webSources,confidence:best.independent>=3?0.95:0.88,provider:"MULTI_SOURCE_WEB"}),
+      quota,checkedAt:isoNow(),lookup:{method:"multi-source-web",date:best.date,votes:best.rows},errors
+    };
+  }
+  return {match:null,quota,checkedAt,lookup:{method:"headtohead+multi-source-fallback",from,to,votes:ranked.slice(0,3)},errors};
 }
 function compactLineups(match){
   return (match?.lineups||[]).map(l=>({
@@ -495,7 +537,11 @@ function compactFixture(match){
     round:match.league?.round||"",
     home:{id:match.teams?.home?.id,name:match.teams?.home?.name||""},
     away:{id:match.teams?.away?.id,name:match.teams?.away?.name||""},
-    lineups:compactLineups(match)
+    lineups:compactLineups(match),
+    verification:match._verification||"API_FOOTBALL",
+    verificationConfidence:match._verificationConfidence??1,
+    verificationSources:match._verificationSources||[],
+    dateOnly:Boolean(match._dateOnly)
   };
 }
 function lastQuota(...items){
@@ -540,28 +586,32 @@ async function buildAuthenticityGate(fixtureText,round){
     };
   }
 
-  const homeSquad=await currentSquad(home.best.id,{force});
-  const awaySquad=await currentSquad(away.best.id,{force});
+  let homeSquad={players:[],quota:null,checkedAt:isoNow()},awaySquad={players:[],quota:null,checkedAt:isoNow()};
+  try{homeSquad=await currentSquad(home.best.id,{force});}catch(err){warnings.push(`Home structured squad unavailable: ${String(err?.message||err).slice(0,180)}`);}
+  try{awaySquad=await currentSquad(away.best.id,{force});}catch(err){warnings.push(`Away structured squad unavailable: ${String(err?.message||err).slice(0,180)}`);}
   let candidate;
   try{
-    candidate=await findUpcomingFixture(home.best.id,away.best.id,{force,fixtureText});
+    candidate=await findUpcomingFixture(home.best.id,away.best.id,{force,fixtureText,homeName:home.best.name,awayName:away.best.name});
   }catch(err){
     candidate={match:null,quota:null,checkedAt:isoNow(),errors:[String(err?.message||err)]};
   }
   let details=null, injuries={rows:[]}, transfers=[];
-  if(candidate.match){
-    details=await fixtureDetails(candidate.match.fixture.id,{force:true});
-    injuries=await fixtureInjuries(candidate.match.fixture.id,{force:true});
+  if(candidate.match?.fixture?.id){
+    try{details=await fixtureDetails(candidate.match.fixture.id,{force:true});}catch(err){warnings.push(`Fixture detail refresh unavailable: ${String(err?.message||err).slice(0,180)}`);details={match:candidate.match,quota:candidate.quota,checkedAt:candidate.checkedAt};}
+    try{injuries=await fixtureInjuries(candidate.match.fixture.id,{force:true});}catch(err){warnings.push(`Structured injuries unavailable: ${String(err?.message||err).slice(0,180)}`);injuries={rows:[],quota:null,checkedAt:isoNow()};}
+  }else if(candidate.match){
+    details={match:candidate.match,quota:candidate.quota,checkedAt:candidate.checkedAt};
+    warnings.push("Exact fixture date was independently verified outside API-Football; structured fixture ID/injuries may remain unavailable.");
   }else{
     warnings.push("Exact fixture verification did not complete through API-Football head-to-head/date lookup.");
     for(const e of (candidate.errors||[]).slice(0,2))warnings.push(`Fixture lookup detail: ${e}`);
   }
   // A fresh Relearn round adds transfer activity so stale squad/player claims get another check.
   if(round>1){
-    const [ht,at]=await Promise.all([
-      recentTransfers(home.best.id,{force:true}),
-      recentTransfers(away.best.id,{force:true})
-    ]);
+    const tr=await Promise.allSettled([recentTransfers(home.best.id,{force:true}),recentTransfers(away.best.id,{force:true})]);
+    const ht=tr[0].status==="fulfilled"?tr[0].value:{rows:[]},at=tr[1].status==="fulfilled"?tr[1].value:{rows:[]};
+    if(tr[0].status==="rejected")warnings.push(`Home transfer refresh unavailable: ${String(tr[0].reason?.message||tr[0].reason).slice(0,160)}`);
+    if(tr[1].status==="rejected")warnings.push(`Away transfer refresh unavailable: ${String(tr[1].reason?.message||tr[1].reason).slice(0,160)}`);
     transfers=[...(ht.rows||[]),...(at.rows||[])].sort((a,b)=>String(b.date).localeCompare(String(a.date))).slice(0,30);
   }
 
@@ -574,6 +624,8 @@ async function buildAuthenticityGate(fixtureText,round){
       warnings.push("Resolved fixture teams do not exactly match both resolved team IDs.");
     }
   }
+  if(!homeSquad.players.length)warnings.push(`Current structured squad returned 0 players for ${home.best.name}; web evidence must not be presented as an official squad list.`);
+  if(!awaySquad.players.length)warnings.push(`Current structured squad returned 0 players for ${away.best.name}; web evidence must not be presented as an official squad list.`);
   if(!confirmedLineups) warnings.push("Confirmed starting XIs are not available yet; do not present a predicted XI as confirmed.");
 
   let status="VERIFIED";
@@ -610,9 +662,19 @@ function fixtureTemporalGuard(gate){
       reason:"Fixture kickoff time could not be verified. Pre-match betting conclusions are blocked until the fixture is verified."
     };
   }
-  const kickoff=Date.parse(f.date);
   const status=String(f.status||"").toLowerCase();
   const now=Date.now();
+  if(f.dateOnly){
+    const fixtureDay=String(f.date).slice(0,10),today=zambiaDate(0);
+    if(fixtureDay>today){
+      return {mode:"PREMATCH_WEB_VERIFIED",bettingAllowed:true,fixtureDate:f.date,verification:f.verification||"WEB",reason:`Future fixture date ${fixtureDay} was verified by multiple independent sources; exact kickoff clock time is not structured.`};
+    }
+    if(fixtureDay===today){
+      return {mode:"UNKNOWN",bettingAllowed:false,fixtureDate:f.date,verification:f.verification||"WEB",reason:"The fixture date is verified as today, but the exact kickoff clock time is not verified. Betting conclusions remain blocked."};
+    }
+    return {mode:"POST_MATCH_AUDIT",bettingAllowed:false,fixtureDate:f.date,verification:f.verification||"WEB",reason:"The independently verified fixture date is already in the past. Post-match evidence cannot be used as a pre-match prediction."};
+  }
+  const kickoff=Date.parse(f.date);
   const futureStatuses=["not started","ns","time to be defined","tbd","scheduled","timed"];
   const finished=/finished|match finished|\bft\b|after extra time|penalties/i.test(status);
   const live=/first half|second half|halftime|extra time|penalt|live|in play/i.test(status);
@@ -1168,7 +1230,7 @@ async function reviewYoutubeHighlights(videos, gate){
   if(!videos.length){
     return {status:"UNAVAILABLE",reviewedAt:isoNow(),videos:[],summary:"No public YouTube highlight links were found by the scouting searches.",observations:[]};
   }
-  if(!process.env.GEMINI_API_KEY){
+  if(!process.env.GEMINI_API_KEY||!providerCanCall("geminiVideo")){
     return {
       status:"PARTIAL",reviewedAt:isoNow(),
       videos:videos.map(v=>({title:v.title,url:v.url,side:v.side||"general"})),
@@ -1219,7 +1281,7 @@ Return ONLY JSON:
     try{
       const interaction=await ai.interactions.create({model,input});
       const out=String(interaction.output_text||interaction.outputText||"").trim();
-      const parsed=parseJsonObject(out,`Video model ${model}`);
+      const parsed=parseJsonObject(out,`Video model ${model}`);healProvider("geminiVideo");
       return {
         status:"COMPLETE",reviewedAt:isoNow(),modelUsed:model,
         videos:videos.map(v=>({title:v.title,url:v.url,side:v.side||"general"})),...parsed
@@ -1232,6 +1294,7 @@ Return ONLY JSON:
     }
   }
 
+  if(errors.length)tripProvider("geminiVideo",errors.join(" | "));
   return {
     status:"PARTIAL",reviewedAt:isoNow(),
     videos:videos.map(v=>({title:v.title,url:v.url,side:v.side||"general"})),
@@ -1318,6 +1381,65 @@ function sourceDigest(sources){
 
 
 
+function deterministicDataEngine({fixture,gate,sources,videoReview,temporalGuard}){
+  const domains=new Set((sources||[]).map(x=>sourceDomain(x.url)).filter(Boolean));
+  const signals=[
+    {key:"BTTS_YES",market:"Both Teams To Score — Yes",rx:[/both teams to score\s*(?:-|:)?\s*yes/i,/btts\s*(?:-|:)?\s*yes/i]},
+    {key:"BTTS_NO",market:"Both Teams To Score — No",rx:[/both teams to score\s*(?:-|:)?\s*no/i,/btts\s*(?:-|:)?\s*no/i]},
+    {key:"TOTAL_GOALS_OVER_2.5",market:"Over 2.5 Goals",rx:[/over\s*2\.5\s*(?:goals?)?/i,/more than\s*2\.5\s*goals/i]},
+    {key:"TOTAL_GOALS_UNDER_2.5",market:"Under 2.5 Goals",rx:[/under\s*2\.5\s*(?:goals?)?/i,/fewer than\s*2\.5\s*goals/i]},
+    {key:"TOTAL_GOALS_OVER_1.5",market:"Over 1.5 Goals",rx:[/over\s*1\.5\s*(?:goals?)?/i]},
+    {key:"TOTAL_GOALS_UNDER_3.5",market:"Under 3.5 Goals",rx:[/under\s*3\.5\s*(?:goals?)?/i]},
+    {key:"TOTAL_CORNERS_OVER_8.5",market:"Over 8.5 Corners",rx:[/over\s*8\.5\s*corners?/i]},
+    {key:"TOTAL_CORNERS_OVER_9.5",market:"Over 9.5 Corners",rx:[/over\s*9\.5\s*corners?/i]},
+    {key:"TOTAL_CORNERS_UNDER_10.5",market:"Under 10.5 Corners",rx:[/under\s*10\.5\s*corners?/i]}
+  ];
+  const rows=[];
+  for(const sig of signals){
+    const ds=new Set(),refs=[];let mentions=0;
+    for(const src of (sources||[])){
+      const text=`${src.title||""} ${src.content||""}`;
+      if(sig.rx.some(rx=>rx.test(text))){
+        mentions++;const d=sourceDomain(src.url);if(d)ds.add(d);refs.push(src.url);
+      }
+    }
+    if(mentions){
+      const support=Math.min(95,30+ds.size*14+mentions*4);
+      rows.push({canonicalMarketKey:sig.key,market:sig.market,supportScore:support,mentions,supportingDomains:ds.size,sourceUrls:refs.slice(0,5)});
+    }
+  }
+  rows.sort((a,b)=>b.supportScore-a.supportScore||b.supportingDomains-a.supportingDomains);
+  const identityScore=Math.round((((gate?.resolved?.home?.confidence||0)+(gate?.resolved?.away?.confidence||0))/2)*100);
+  const fixtureScore=gate?.fixture?(gate.fixture.verification==="API_FOOTBALL"?100:Math.round((gate.fixture.verificationConfidence||0.8)*100)):0;
+  const squadCounts=[gate?.squads?.home?.count||0,gate?.squads?.away?.count||0];
+  const squadScore=Math.min(100,Math.round((Math.min(30,squadCounts[0])+Math.min(30,squadCounts[1]))/60*100));
+  const diversityScore=Math.min(100,domains.size*8);
+  const videoScore=videoReview?.status==="COMPLETE"?70:videoReview?.videos?.length?20:0;
+  const overall=Math.round(identityScore*.20+fixtureScore*.25+squadScore*.20+diversityScore*.25+videoScore*.10);
+  const strongest=rows[0]||null;
+  return {
+    engine:"LOCAL_DETERMINISTIC_V1",fixture,checkedAt:isoNow(),overallDataScore:overall,
+    identityScore,fixtureVerificationScore:fixtureScore,squadCoverageScore:squadScore,sourceDiversityScore:diversityScore,videoSupportScore:videoScore,
+    sourceDomains:domains.size,explicitMarketSignals:rows,
+    strongestSignal:strongest,
+    signalUsable:Boolean(temporalGuard?.bettingAllowed&&strongest&&strongest.supportingDomains>=3&&strongest.supportScore>=72),
+    note:strongest?"Signals count only explicit market wording found across independent source domains; they are not substitutes for full statistical distributions.":"No repeated explicit exact-market wording was detected across the gathered source snippets."
+  };
+}
+function deterministicCouncilMember(payload){
+  const e=payload.dataEngine||deterministicDataEngine(payload);
+  const usable=e.signalUsable&&e.strongestSignal;
+  return {
+    provider:"Local",modelName:"Deterministic Statistical Engine",modelId:"local:deterministic-v1",available:true,brainType:"deterministic-engine",
+    primaryMarket:usable?e.strongestSignal.market:"UNRESOLVED",
+    canonicalMarketKey:usable?e.strongestSignal.canonicalMarketKey:"UNRESOLVED",
+    marketFamily:usable?"Explicit multi-source market signal":"Data quality",
+    fairProbabilityPct:null,confidence:usable?"MEDIUM":"LOW",classification:usable?"MEDIUM":"UNRESOLVED / HIGH RISK",
+    strongestReasons:usable?[`${e.strongestSignal.supportingDomains} independent source domains explicitly referenced this exact market wording.`,`Local data score ${e.overallDataScore}/100.`]:[`Local data score ${e.overallDataScore}/100.`,`No deterministic market signal passed the multi-source threshold.`],
+    counterEvidence:["This engine does not infer xG, tactical quality or hidden statistics from text snippets."],topAlternatives:[],dataWeaknesses:[e.note],antiBiasCheck:"No bookmaker odds or user market were used."
+  };
+}
+
 function parseHttpJson(text,label="Remote service"){
   const raw=String(text??"").trim();
   if(!raw)throw new Error(`${label} returned an empty response.`);
@@ -1363,7 +1485,7 @@ function clampPct(v){
 function canonicalKey(s){
   return String(s||"").toUpperCase().replace(/[^A-Z0-9.+-]+/g,"_").replace(/^_+|_+$/g,"").replace(/_+/g,"_").slice(0,100);
 }
-function councilEvidencePack({fixture,gate,sources,videoReview,fallbackEvidence}){
+function councilEvidencePack({fixture,gate,sources,videoReview,fallbackEvidence,dataEngine}){
   return `FIXTURE:\n${fixture}\n\nSTRUCTURED CURRENT-FOOTBALL DATA:\n${structuredDigest(gate)}\n\nFALLBACK / CROSS-CHECK PROVIDERS:\n${JSON.stringify(fallbackEvidence||{},null,2)}\n\nFRESH WEB EVIDENCE:\n${sourceDigest(sources)}\n\nVIDEO REVIEW:\n${JSON.stringify(videoReview||{status:"UNAVAILABLE"},null,2)}`;
 }
 function councilPrompt(payload){
@@ -1431,17 +1553,19 @@ async function geminiCouncilMember(payload){
   normalized.retryAttempt=result.attempt;
   return normalized;
 }
-async function groqCouncilMember(payload,model,display){
+async function groqCouncilMember(payload,model,display,specialistRole=""){
   const key=requireEnv("GROQ_API_KEY");
   const response=await fetch("https://api.groq.com/openai/v1/chat/completions",{
     method:"POST",
     headers:{"Content-Type":"application/json","Authorization":`Bearer ${key}`},
-    body:JSON.stringify({model,temperature:0.2,max_completion_tokens:3500,messages:[{role:"user",content:councilPrompt(payload)}]})
+    body:JSON.stringify({model,temperature:0.2,max_completion_tokens:3500,messages:[{role:"user",content:councilPrompt({...payload,specialistRole})}]})
   });
   const txt=await response.text();
   if(!response.ok)throw new Error(`${display} council failed (${response.status}): ${txt.slice(0,260)}`);
-  const d=JSON.parse(txt);
-  return normalizeCouncilResult("Groq",display,parseJsonObject(d.choices?.[0]?.message?.content||"",display));
+  const d=parseHttpJson(txt,display);
+  const out=normalizeCouncilResult("Groq",display,parseJsonObject(d.choices?.[0]?.message?.content||"",display));
+  out.modelId=model;out.specialistRole=specialistRole||"General independent analyst";out.brainType=specialistRole?"specialist-agent":"unique-model";
+  healProvider("groq");return out;
 }
 async function cloudflareCouncilMember(payload){
   const account=process.env.CLOUDFLARE_ACCOUNT_ID,token=process.env.CLOUDFLARE_AUTH_TOKEN;
@@ -1454,11 +1578,11 @@ async function cloudflareCouncilMember(payload){
   });
   const txt=await response.text();
   if(!response.ok)throw new Error(`Meta Llama council failed (${response.status}): ${txt.slice(0,260)}`);
-  const d=JSON.parse(txt);
+  const d=parseHttpJson(txt,"Cloudflare Council");
   const out=d.result?.response ?? d.result?.text ?? d.result?.output_text ?? d.result ?? "";
   const display=payload?._cfName||"Meta Llama";
   const normalized=normalizeCouncilResult("Cloudflare",display,parseJsonObject(typeof out==="string"?out:JSON.stringify(out),display));
-  normalized.modelId=model;normalized.brainType="unique-model";
+  normalized.modelId=model;normalized.specialistRole=payload?.specialistRole||"General independent analyst";normalized.brainType=payload?.specialistRole?"specialist-agent":"unique-model";healProvider("cloudflare");
   return normalized;
 }
 async function openRouterCouncilMember(payload){
@@ -1484,54 +1608,80 @@ function median(nums){
   const m=Math.floor(a.length/2);
   return a.length%2?a[m]:(a[m-1]+a[m])/2;
 }
-function aggregateCouncil(results){
-  const available=results.filter(x=>x.available);
+function aggregateVoteRows(rows){
+  const available=rows.filter(x=>x.available);
   const resolved=available.filter(x=>x.canonicalMarketKey&&x.canonicalMarketKey!=="UNRESOLVED");
   const groups=new Map();
-  for(const r of resolved){
-    const k=r.canonicalMarketKey;
-    if(!groups.has(k))groups.set(k,[]);
-    groups.get(k).push(r);
-  }
+  for(const r of resolved){const k=r.canonicalMarketKey;if(!groups.has(k))groups.set(k,[]);groups.get(k).push(r);}
   const ranked=[...groups.entries()].map(([key,members])=>({
     canonicalMarketKey:key,market:members[0]?.primaryMarket||key,count:members.length,
-    models:members.map(x=>x.modelName),
-    medianFairProbabilityPct:median(members.map(x=>Number(x.fairProbabilityPct)).filter(Number.isFinite))
+    models:members.map(x=>x.modelName),medianFairProbabilityPct:median(members.map(x=>Number(x.fairProbabilityPct)).filter(Number.isFinite))
   })).sort((a,b)=>b.count-a.count||(b.medianFairProbabilityPct||0)-(a.medianFairProbabilityPct||0));
-
   const top=ranked[0]||null,total=available.length||1,share=top?top.count/total:0;
   let convergence="NONE";
-  if(available.length<2) convergence="INSUFFICIENT";
-  else if(top?.count>=3&&share>=0.6) convergence="HIGH";
-  else if(top?.count>=2&&share>=0.4) convergence="MEDIUM";
-  else if(top?.count>=2) convergence="LOW";
-
-  const consensusAllowed=available.length>=2 && top?.count>=2;
+  if(available.length<2)convergence="INSUFFICIENT";
+  else if(top?.count>=3&&share>=0.60)convergence="HIGH";
+  else if(top?.count>=2&&share>=0.40)convergence="MEDIUM";
+  else if(top?.count>=2)convergence="LOW";
+  return {available:available.length,resolved:resolved.length,convergence,top,ranked,share};
+}
+function uniqueModelRepresentatives(results){
+  const byModel=new Map();
+  for(const r of results.filter(x=>x.available)){
+    const key=`${r.provider}:${r.modelId||r.modelName}`;
+    if(!byModel.has(key))byModel.set(key,[]);byModel.get(key).push(r);
+  }
+  const reps=[];
+  for(const [key,rows] of byModel){
+    const vote=aggregateVoteRows(rows);
+    if(!vote.top){reps.push({...rows[0],canonicalMarketKey:"UNRESOLVED",primaryMarket:"UNRESOLVED",modelName:key});continue;}
+    reps.push({...rows[0],canonicalMarketKey:vote.top.canonicalMarketKey,primaryMarket:vote.top.market,fairProbabilityPct:vote.top.medianFairProbabilityPct,modelName:key});
+  }
+  return reps;
+}
+function aggregateCouncil(results){
+  const available=results.filter(x=>x.available);
+  const agent=aggregateVoteRows(available);
+  const modelReps=uniqueModelRepresentatives(available);
+  const unique=aggregateVoteRows(modelReps);
+  const chosen=unique.available>=2?unique:agent;
+  const consensusAllowed=chosen.available>=2&&chosen.top?.count>=2;
   return {
     availableModels:available.length,
+    uniqueUnderlyingModels:modelReps.length,
     unresolvedModels:available.filter(x=>x.canonicalMarketKey==="UNRESOLVED").length,
-    convergence,
-    consensusMarket:consensusAllowed?(top?.market||"NO CONSENSUS"):"NO COUNCIL CONSENSUS",
-    consensusCanonicalKey:consensusAllowed?(top?.canonicalMarketKey||""):"",
-    leadingSingleModelMarket:available.length===1?(top?.market||"UNRESOLVED"):"",
-    modelsAgreeing:consensusAllowed?(top?.models||[]):[],
-    medianFairProbabilityPct:consensusAllowed?(top?.medianFairProbabilityPct??null):null,
-    groups:ranked,
-    note:available.length<2
-      ?`Only ${available.length} council model answered. That is an individual opinion, not council convergence.`
-      :top?`${top.count} of ${available.length} available council models independently selected the same canonical market.`:
-      "No resolved market convergence was found."
+    convergence:chosen.convergence,
+    consensusMarket:consensusAllowed?(chosen.top?.market||"NO CONSENSUS"):"NO COUNCIL CONSENSUS",
+    consensusCanonicalKey:consensusAllowed?(chosen.top?.canonicalMarketKey||""):"",
+    leadingSingleModelMarket:chosen.available===1?(chosen.top?.market||"UNRESOLVED"):"",
+    modelsAgreeing:consensusAllowed?(chosen.top?.models||[]):[],
+    medianFairProbabilityPct:consensusAllowed?(chosen.top?.medianFairProbabilityPct??null):null,
+    groups:chosen.ranked,
+    agentConsensus:{convergence:agent.convergence,availableAgents:agent.available,share:agent.share,market:agent.top?.market||"NO CONSENSUS",count:agent.top?.count||0},
+    uniqueModelConsensus:{convergence:unique.convergence,uniqueModels:unique.available,share:unique.share,market:unique.top?.market||"NO CONSENSUS",count:unique.top?.count||0},
+    note:chosen.available<2?`Only ${chosen.available} independent underlying model/engine vote is available. That is not council convergence.`:
+      chosen.top?`${chosen.top.count} of ${chosen.available} independent underlying model/engine votes selected the same canonical market. Agent-seat consensus is shown separately.`:"No resolved market convergence was found."
   };
 }
 
 const SPECIALIST_ROLES=[
-  "Current-squad and lineup auditor","Opponent-strength and form analyst","Goals and chance-quality analyst",
-  "Shots and shots-on-target analyst","Corners, width and crossing analyst","Tactical interaction and game-state analyst",
-  "Defensive structure and transition-risk analyst","Set-piece analyst","Cards, fouls and referee analyst",
-  "Rest, travel, rotation and motivation analyst","Home/away split analyst","Underdog resistance analyst",
-  "First-half market analyst","Second-half market analyst","Combination-market analyst",
-  "Adversarial kill-the-pick analyst","Data-quality and stale-information auditor","Video-evidence tactical analyst",
-  "Exact-line threshold analyst","Conservative probability calibration analyst"
+  "Current-squad authenticity auditor","Confirmed-lineup auditor","Injury and suspension impact analyst","Transfer and stale-roster auditor",
+  "Opponent-strength adjusted form analyst","Last-five distribution analyst","Last-ten distribution analyst","Home/away split analyst",
+  "Goals distribution analyst","Expected-goals and chance-quality analyst","Finishing sustainability analyst","Clean-sheet and concession analyst",
+  "Total-shots analyst","Shots-on-target analyst","Shot-quality and blocked-shot analyst","Possession and territory analyst",
+  "Wing-play and crossing analyst","Full-back involvement analyst","Total-corners analyst","Team-corners analyst","First-half corners analyst","Corner-handicap analyst",
+  "Set-piece attack analyst","Set-piece defence analyst","Pressing-intensity analyst","Transition-attack analyst","Transition-defence analyst","Low-block breakdown analyst",
+  "High-line vulnerability analyst","Central-midfield control analyst","Counter-press analyst","Goalkeeper impact analyst","Bench-depth analyst","Late-game substitute impact analyst",
+  "First-half goals analyst","Second-half goals analyst","Team-goals analyst","BTTS analyst","Asian-handicap analyst","European-handicap analyst",
+  "1X2 analyst","Double-chance analyst","Draw-no-bet analyst","Win-a-half analyst","Combination-market analyst","Exact-line threshold analyst",
+  "Cards and team-cards analyst","Fouls analyst","Referee-tendency analyst","Discipline game-state analyst",
+  "Rest and fixture-congestion analyst","Travel and venue analyst","Weather analyst","Motivation and competition-context analyst","Table-pressure analyst","Cup-leg aggregate-state analyst",
+  "Underdog resistance analyst","Favourite vulnerability analyst","Lead-protection analyst","Comeback-state analyst","Scoreless-state analyst","Early-goal stress-test analyst",
+  "Red-card stress-test analyst","Rotation stress-test analyst","Key-player absence stress-test analyst","Tactical-shape sensitivity analyst",
+  "Historical H2H relevance auditor","Similar-opponent analyst","Opponent-quality distortion auditor","Small-sample auditor","Recency-weighting analyst","Data-conflict auditor",
+  "Source-quality auditor","Stale-information auditor","Video-evidence tactical analyst","Highlight-selection bias auditor","Public-prediction contamination auditor",
+  "Adversarial kill-the-pick analyst","Exact-opposite market analyst","Failure-set analyst","Probability calibration analyst","Conservative uncertainty analyst",
+  "Market-family elimination analyst","Runner-up market analyst","No-bet threshold analyst","Independent synthesis auditor","Final anti-bias auditor"
 ];
 
 async function openRouterFreeModels(){
@@ -1561,8 +1711,9 @@ async function openRouterSpecificCouncilMember(payload,modelId,display,specialis
     if(!r.ok)throw new Error(`${display} failed (${r.status}): ${text.slice(0,220)}`);
     const d=parseHttpJson(text,"OpenRouter Chat");
     const out=normalizeCouncilResult("OpenRouter",display,parseJsonObject(d.choices?.[0]?.message?.content||"",display));
-    out.modelId=modelId;out.specialistRole=specialistRole||"General independent analyst";out.brainType="unique-model";
-    usageOk("openrouter");return out;
+    out.modelId=d.model||modelId;out.modelName=(d.model&&modelId==="openrouter/free")?`OpenRouter Free → ${d.model}`:display;
+    out.specialistRole=specialistRole||"General independent analyst";out.brainType=specialistRole?"specialist-agent":"unique-model";
+    usageOk("openrouter");healProvider("openrouter");return out;
   }catch(err){usageFail("openrouter",err);throw err;}
 }
 async function geminiSpecialistMember(payload,role,index){
@@ -1579,10 +1730,17 @@ async function runInBatches(jobs,batchSize=5){
   const results=[];
   for(let i=0;i<jobs.length;i+=batchSize){
     const chunk=jobs.slice(i,i+batchSize);
-    const settled=await Promise.allSettled(chunk.map(j=>j.run()));
+    const settled=await Promise.allSettled(chunk.map(j=>{
+      if(j.healthName&&!providerCanCall(j.healthName))return Promise.reject(new Error(`${j.healthName} provider circuit is ${providerHealth[j.healthName]?.state||"blocked"}; skipped during cooldown.`));
+      return j.run();
+    }));
     settled.forEach((x,k)=>{
       const j=chunk[k];
-      results.push(x.status==="fulfilled"?x.value:{provider:j.provider,modelName:j.name,available:false,specialistRole:j.role||"",brainType:j.brainType||"",error:String(x.reason?.message||x.reason||"Brain failed")});
+      if(x.status==="fulfilled")results.push(x.value);
+      else{
+        if(j.healthName)tripProvider(j.healthName,x.reason);
+        results.push({provider:j.provider,modelName:j.name,modelId:j.modelId,available:false,specialistRole:j.role||"",brainType:j.brainType||"",error:String(x.reason?.message||x.reason||"Brain failed")});
+      }
     });
     if(i+batchSize<jobs.length)await sleep(900);
   }
@@ -1593,60 +1751,79 @@ function councilSummaryCounts(members=[]){
   return {
     agentSeats:members.length,availableAgents:available.length,
     uniqueModels:new Set(available.map(x=>`${x.provider}:${x.modelId||x.modelName}`)).size,
-    specialistAgents:available.filter(x=>x.brainType==="specialist-agent").length
+    specialistAgents:available.filter(x=>x.brainType==="specialist-agent").length,
+    deterministicEngines:available.filter(x=>x.brainType==="deterministic-engine").length,
+    quotaSkipped:members.filter(x=>x.available===false&&/quota|rate|cooldown|blocked/i.test(String(x.error||""))).length
   };
 }
 
 async function runAiCouncil(payload,{targetSize=8,existingMembers=[]}={}){
-  const target=Math.max(1,Math.min(50,Number(targetSize||8)));
+  const target=Math.max(1,Math.min(100,Number(targetSize||8)));
   const jobs=[];
   const used=new Set((existingMembers||[]).map(x=>`${x.provider}:${x.modelId||x.modelName}:${x.specialistRole||""}`));
-  const add=(job)=>{
-    const key=`${job.provider}:${job.modelId||job.name}:${job.role||""}`;
-    if(!used.has(key)){used.add(key);jobs.push(job);}
-  };
+  const add=(job)=>{const key=`${job.provider}:${job.modelId||job.name}:${job.role||""}`;if(!used.has(key)){used.add(key);jobs.push(job);}};
 
-  add({provider:"Google",name:"Gemini",modelId:"gemini-core",brainType:"unique-model",run:()=>geminiCouncilMember(payload)});
-
-  if(process.env.GROQ_API_KEY){
-    add({provider:"Groq",name:"OpenAI GPT-OSS 120B",modelId:"openai/gpt-oss-120b",brainType:"unique-model",run:()=>groqCouncilMember(payload,"openai/gpt-oss-120b","OpenAI GPT-OSS 120B")});
-    add({provider:"Groq",name:"OpenAI GPT-OSS 20B",modelId:"openai/gpt-oss-20b",brainType:"unique-model",run:()=>groqCouncilMember(payload,"openai/gpt-oss-20b","OpenAI GPT-OSS 20B")});
-    add({provider:"Groq",name:"Qwen 3.8 27B",modelId:"qwen/qwen3.8-27b",brainType:"unique-model",run:()=>groqCouncilMember(payload,"qwen/qwen3.8-27b","Qwen 3.8 27B")});
+  if(!(existingMembers||[]).some(x=>x.modelId==="local:deterministic-v1")){
+    add({provider:"Local",name:"Deterministic Statistical Engine",modelId:"local:deterministic-v1",brainType:"deterministic-engine",run:async()=>deterministicCouncilMember(payload)});
   }
 
-  if(process.env.CLOUDFLARE_ACCOUNT_ID&&process.env.CLOUDFLARE_AUTH_TOKEN){
-    const models=[
+  if(process.env.OPENROUTER_API_KEY&&providerCanCall("openrouter")){
+    const freeModels=await openRouterFreeModels();
+    for(const fm of freeModels.slice(0,30))add({provider:"OpenRouter",name:fm.name,modelId:fm.id,brainType:"unique-model",healthName:"openrouter",run:()=>openRouterSpecificCouncilMember(payload,fm.id,fm.name)});
+  }
+  if(process.env.GROQ_API_KEY&&providerCanCall("groq")){
+    add({provider:"Groq",name:"OpenAI GPT-OSS 120B",modelId:"openai/gpt-oss-120b",brainType:"unique-model",healthName:"groq",run:()=>groqCouncilMember(payload,"openai/gpt-oss-120b","OpenAI GPT-OSS 120B")});
+    add({provider:"Groq",name:"OpenAI GPT-OSS 20B",modelId:"openai/gpt-oss-20b",brainType:"unique-model",healthName:"groq",run:()=>groqCouncilMember(payload,"openai/gpt-oss-20b","OpenAI GPT-OSS 20B")});
+    add({provider:"Groq",name:"Qwen 3.8 27B",modelId:"qwen/qwen3.8-27b",brainType:"unique-model",healthName:"groq",run:()=>groqCouncilMember(payload,"qwen/qwen3.8-27b","Qwen 3.8 27B")});
+  }
+  if(process.env.CLOUDFLARE_ACCOUNT_ID&&process.env.CLOUDFLARE_AUTH_TOKEN&&providerCanCall("cloudflare")){
+    for(const [modelId,name] of [
       ["@cf/meta/llama-3.3-70b-instruct-fp8-fast","Meta Llama 3.3 70B"],
       ["@cf/google/gemma-4-26b-a4b-it","Gemma 4 26B"],
       ["@cf/nvidia/nemotron-3-120b-a12b","NVIDIA Nemotron 3 120B"],
       ["@cf/zai-org/glm-4.7-flash","GLM 4.7 Flash"]
-    ];
-    for(const [modelId,name] of models){
-      add({provider:"Cloudflare",name,modelId,brainType:"unique-model",run:()=>cloudflareCouncilMember({...payload,_cfModel:modelId,_cfName:name})});
-    }
+    ])add({provider:"Cloudflare",name,modelId,brainType:"unique-model",healthName:"cloudflare",run:()=>cloudflareCouncilMember({...payload,_cfModel:modelId,_cfName:name})});
+  }
+  // Gemini is deliberately last for text so its free quota is preserved for video review.
+  if(process.env.GEMINI_API_KEY&&providerCanCall("geminiText")){
+    add({provider:"Google",name:"Gemini",modelId:"gemini-core",brainType:"unique-model",healthName:"geminiText",run:()=>geminiCouncilMember(payload)});
   }
 
-  if(process.env.OPENROUTER_API_KEY&&jobs.length<target){
-    const freeModels=await openRouterFreeModels();
-    for(const fm of freeModels){
-      if(jobs.length>=target)break;
-      add({provider:"OpenRouter",name:fm.name,modelId:fm.id,brainType:"unique-model",run:()=>openRouterSpecificCouncilMember(payload,fm.id,fm.name)});
-    }
+  const specialistProviders=[];
+  if(process.env.OPENROUTER_API_KEY&&providerCanCall("openrouter"))specialistProviders.push("openrouter");
+  if(process.env.GROQ_API_KEY&&providerCanCall("groq"))specialistProviders.push("groq");
+  if(process.env.CLOUDFLARE_ACCOUNT_ID&&process.env.CLOUDFLARE_AUTH_TOKEN&&providerCanCall("cloudflare"))specialistProviders.push("cloudflare");
+  if(process.env.GEMINI_API_KEY&&providerCanCall("geminiText"))specialistProviders.push("gemini");
+  const groqModels=[["openai/gpt-oss-120b","OpenAI GPT-OSS 120B"],["openai/gpt-oss-20b","OpenAI GPT-OSS 20B"],["qwen/qwen3.8-27b","Qwen 3.8 27B"]];
+  const cfModels=[["@cf/meta/llama-3.3-70b-instruct-fp8-fast","Meta Llama 3.3 70B"],["@cf/google/gemma-4-26b-a4b-it","Gemma 4 26B"],["@cf/nvidia/nemotron-3-120b-a12b","NVIDIA Nemotron 3 120B"],["@cf/zai-org/glm-4.7-flash","GLM 4.7 Flash"]];
+  let si=0;
+  while(jobs.length<target && si<SPECIALIST_ROLES.length && specialistProviders.length){
+    const role=SPECIALIST_ROLES[si],provider=specialistProviders[si%specialistProviders.length],idx=si++;
+    if(provider==="openrouter")add({provider:"OpenRouter",name:`OpenRouter Specialist ${idx+1}`,modelId:"openrouter/free",role,brainType:"specialist-agent",healthName:"openrouter",run:()=>openRouterSpecificCouncilMember(payload,"openrouter/free",`OpenRouter Specialist ${idx+1}`,role)});
+    else if(provider==="groq"){
+      const [modelId,name]=groqModels[idx%groqModels.length];add({provider:"Groq",name:`${name} Specialist`,modelId,role,brainType:"specialist-agent",healthName:"groq",run:()=>groqCouncilMember(payload,modelId,`${name} Specialist`,role)});
+    }else if(provider==="cloudflare"){
+      const [modelId,name]=cfModels[idx%cfModels.length];add({provider:"Cloudflare",name:`${name} Specialist`,modelId,role,brainType:"specialist-agent",healthName:"cloudflare",run:()=>cloudflareCouncilMember({...payload,_cfModel:modelId,_cfName:`${name} Specialist`,specialistRole:role})});
+    }else add({provider:"Google",name:`Gemini Specialist ${idx+1}`,modelId:"gemini-specialist",role,brainType:"specialist-agent",healthName:"geminiText",run:()=>geminiSpecialistMember(payload,role,idx)});
   }
 
-  let roleIndex=0;
-  while(jobs.length<target&&roleIndex<SPECIALIST_ROLES.length){
-    const role=SPECIALIST_ROLES[roleIndex++];
-    add({provider:"Google",name:`Gemini Specialist ${roleIndex}`,modelId:"gemini-specialist",role,brainType:"specialist-agent",run:()=>geminiSpecialistMember(payload,role,roleIndex-1)});
+  let members=[...(existingMembers||[])],cursor=0,stoppedEarly=false,stopReason="";
+  const waveSize=8;
+  while(members.length<target && cursor<jobs.length){
+    const needed=Math.min(waveSize,target-members.length);
+    const wave=jobs.slice(cursor,cursor+needed);cursor+=needed;
+    const fresh=await runInBatches(wave,4);members.push(...fresh);
+    const agg=aggregateCouncil(members);
+    const uc=agg.uniqueModelConsensus||{};
+    if(target>12 && members.length>=12 && uc.uniqueModels>=3 && uc.convergence==="HIGH" && uc.share>=0.67){stoppedEarly=true;stopReason="Adaptive stop: strong agreement across at least 3 independent underlying models/engines.";break;}
+    if(target>24 && members.length>=24 && uc.uniqueModels>=4 && ["HIGH","MEDIUM"].includes(uc.convergence) && uc.share>=0.60){stoppedEarly=true;stopReason="Adaptive stop: stable multi-model agreement after a deep council wave.";break;}
+    if(cursor<jobs.length&&members.length<target)await sleep(700);
   }
-
-  const needed=Math.max(0,target-(existingMembers||[]).length);
-  const fresh=await runInBatches(jobs.slice(0,needed),5);
-  const members=[...(existingMembers||[]),...fresh];
+  const counts=councilSummaryCounts(members),aggregation=aggregateCouncil(members);
   return {
-    checkedAt:isoNow(),requestedAgentSeats:target,members,
-    counts:councilSummaryCounts(members),aggregation:aggregateCouncil(members),
-    warning:target>=20?"Large councils consume many free-provider requests. The app stops gracefully when a provider reaches its free limit.":""
+    checkedAt:isoNow(),requestedAgentSeats:target,members,counts,aggregation,stoppedEarly,stopReason,
+    providerHealth:providerHealthSnapshot(),
+    warning:target>=20?"Large council targets are adaptive. The app expands in waves and may stop early when independent underlying models converge, protecting free quotas.":""
   };
 }
 async function apiFootballPrediction(fixtureId){
@@ -1920,7 +2097,7 @@ async function externalPredictionBenchmarks(fixture,gate){
   };
 }
 
-function analysisPrompt({fixture,round,originalMarket,previousRounds,sources,gate,videoReview,fallbackEvidence,temporalGuard}){
+function analysisPrompt({fixture,round,originalMarket,previousRounds,sources,gate,videoReview,fallbackEvidence,temporalGuard,dataEngine}){
   const prior=previousRounds?.length?JSON.stringify(previousRounds.slice(-3),null,2):"None";
   const original=originalMarket||"Not supplied";
   return `
@@ -1935,6 +2112,9 @@ ${structuredDigest(gate)}
 
 CROSS-CHECK / FALLBACK PROVIDERS:
 ${JSON.stringify(fallbackEvidence||{},null,2)}
+
+LOCAL DETERMINISTIC ENGINE (non-AI, no bookmaker odds):
+${JSON.stringify(dataEngine||{},null,2)}
 
 HARD AUTHENTICITY RULES:
 1. Treat API-Football's current squad/fixture data as the primary identity check for club membership and fixture identity.
@@ -2154,6 +2334,7 @@ Ground factual claims only in the structured data or supplied web sources.
 function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
 
 async function geminiTextWithRetry({prompt,maxOutputTokens=9000,responseMimeType="application/json",preferredModel}){
+  if(!providerCanCall("geminiText"))throw new Error(`Gemini text circuit is ${providerHealth.geminiText.state}; cooldown active.`);
   const key=requireEnv("GEMINI_API_KEY");
   const configured=preferredModel||process.env.GEMINI_MODEL||"gemini-3.8-flash";
   const fallbackModels=[configured,"gemini-3.7-flash","gemini-3.6-flash","gemini-3.5-flash-lite"]
@@ -2197,7 +2378,7 @@ async function geminiTextWithRetry({prompt,maxOutputTokens=9000,responseMimeType
   }
 
   const err=new Error(`Gemini unavailable after automatic retries/fallbacks. ${errors.slice(-4).join(" | ")}`);
-  usageFail("gemini",err);
+  usageFail("gemini",err);tripProvider("geminiText",err);
   throw err;
 }
 
@@ -2281,7 +2462,7 @@ async function openRouterPrimaryAnalyze(payload){
 }
 
 function degradedPrimaryAnalysis(payload,attempts=[]){
-  const {fixture,gate,sources,videoReview,temporalGuard}=payload;
+  const {fixture,gate,sources,videoReview,temporalGuard,dataEngine}=payload;
   const fixtureOk=Boolean(gate?.fixture?.date);
   const squadsOk=Boolean(gate?.squads?.home?.count && gate?.squads?.away?.count);
   const sourceCount=Array.isArray(sources)?sources.length:0;
@@ -2342,7 +2523,7 @@ function degradedPrimaryAnalysis(payload,attempts=[]){
       dataFreshnessScore:sourceCount?65:30,
       keyPatterns:[],
       keyContradictions:["Primary AI synthesis unavailable; sporting patterns were not inferred automatically."],
-      analysisNarrative:"Data gathering completed, but all configured primary AI analysts were unavailable or quota-limited. The app preserved the evidence instead of inventing a betting conclusion.",
+      analysisNarrative:`Data gathering completed and the local deterministic engine scored the evidence at ${dataEngine?.overallDataScore??"—"}/100, but all configured primary AI analysts were unavailable or quota-limited. The app preserved the evidence instead of inventing a betting conclusion.`,
       marketScores:[]
     },
     dataCoverage:coverage,
@@ -2377,65 +2558,33 @@ function degradedPrimaryAnalysis(payload,attempts=[]){
 
 async function primaryAnalyzeWithFallback(payload){
   const attempts=[];
+  const record=(name,err)=>{const msg=String(err?.message||err).slice(0,420);attempts.push(`${name}: ${msg}`);return msg;};
 
-  if(process.env.GEMINI_API_KEY){
-    try{
-      const out=await geminiAnalyze(payload);
-      out._primaryProvider="Google";
-      out._primaryModel=out._geminiModelUsed||process.env.GEMINI_MODEL||"Gemini";
-      out._primaryAttempts=attempts;
-      return out;
-    }catch(err){
-      attempts.push(`Gemini: ${String(err?.message||err).slice(0,420)}`);
+  // Preserve Gemini quota for visual video review. Prefer other healthy text providers.
+  if(process.env.OPENROUTER_API_KEY&&providerCanCall("openrouter")){
+    try{const out=await openRouterPrimaryAnalyze(payload);healProvider("openrouter");out._primaryAttempts=attempts;return out;}
+    catch(err){tripProvider("openrouter",err);record("OpenRouter",err);}
+  }
+  if(process.env.GROQ_API_KEY&&providerCanCall("groq")){
+    for(const [model,display] of [["openai/gpt-oss-120b","OpenAI GPT-OSS 120B"],["openai/gpt-oss-20b","OpenAI GPT-OSS 20B"],["qwen/qwen3.8-27b","Qwen 3.8 27B"]]){
+      try{const out=await groqPrimaryAnalyze(payload,model,display);healProvider("groq");out._primaryAttempts=attempts;return out;}
+      catch(err){tripProvider("groq",err);record(`Groq ${display}`,err);if(!providerCanCall("groq"))break;}
     }
   }
-
-  if(process.env.OPENROUTER_API_KEY){
-    try{
-      const out=await openRouterPrimaryAnalyze(payload);
-      out._primaryAttempts=attempts;
-      return out;
-    }catch(err){
-      attempts.push(`OpenRouter: ${String(err?.message||err).slice(0,420)}`);
+  if(process.env.CLOUDFLARE_ACCOUNT_ID&&process.env.CLOUDFLARE_AUTH_TOKEN&&providerCanCall("cloudflare")){
+    for(const [model,display] of [["@cf/meta/llama-3.3-70b-instruct-fp8-fast","Meta Llama 3.3 70B"],["@cf/google/gemma-4-26b-a4b-it","Gemma 4 26B"],["@cf/nvidia/nemotron-3-120b-a12b","NVIDIA Nemotron 3 120B"],["@cf/zai-org/glm-4.7-flash","GLM 4.7 Flash"]]){
+      try{const out=await cloudflarePrimaryAnalyze(payload,model,display);healProvider("cloudflare");out._primaryAttempts=attempts;return out;}
+      catch(err){tripProvider("cloudflare",err);record(`Cloudflare ${display}`,err);if(!providerCanCall("cloudflare"))break;}
     }
   }
-
-  if(process.env.GROQ_API_KEY){
-    const groqModels=[
-      ["openai/gpt-oss-120b","OpenAI GPT-OSS 120B"],
-      ["openai/gpt-oss-20b","OpenAI GPT-OSS 20B"]
-    ];
-    for(const [model,display] of groqModels){
-      try{
-        const out=await groqPrimaryAnalyze(payload,model,display);
-        out._primaryAttempts=attempts;
-        return out;
-      }catch(err){
-        attempts.push(`Groq ${display}: ${String(err?.message||err).slice(0,420)}`);
-      }
-    }
+  if(process.env.GEMINI_API_KEY&&providerCanCall("geminiText")){
+    try{const out=await geminiAnalyze(payload);healProvider("geminiText");out._primaryProvider="Google";out._primaryModel=out._geminiModelUsed||process.env.GEMINI_MODEL||"Gemini";out._primaryAttempts=attempts;return out;}
+    catch(err){tripProvider("geminiText",err);record("Gemini text",err);}
   }
-
-  if(process.env.CLOUDFLARE_ACCOUNT_ID&&process.env.CLOUDFLARE_AUTH_TOKEN){
-    const cfModels=[
-      ["@cf/meta/llama-3.3-70b-instruct-fp8-fast","Meta Llama 3.3 70B"],
-      ["@cf/google/gemma-4-26b-a4b-it","Gemma 4 26B"],
-      ["@cf/nvidia/nemotron-3-120b-a12b","NVIDIA Nemotron 3 120B"]
-    ];
-    for(const [model,display] of cfModels){
-      try{
-        const out=await cloudflarePrimaryAnalyze(payload,model,display);
-        out._primaryAttempts=attempts;
-        return out;
-      }catch(err){
-        attempts.push(`Cloudflare ${display}: ${String(err?.message||err).slice(0,420)}`);
-      }
-    }
-  }
-
-  return degradedPrimaryAnalysis(payload,attempts);
+  const out=degradedPrimaryAnalysis(payload,attempts);
+  out._providerHealth=providerHealthSnapshot();
+  return out;
 }
-
 async function geminiAnalyze(payload){
   let firstError=null;
   for(let jsonAttempt=1;jsonAttempt<=2;jsonAttempt++){
@@ -2469,12 +2618,12 @@ Do not add markdown or commentary outside the JSON.`;
 
 app.get("/api/version",(req,res)=>{
   res.setHeader("Cache-Control","no-store");
-  res.json({ok:true,version:"4.2.0",protocol:"async-research-v2"});
+  res.json({ok:true,version:"5.0.0",protocol:"adaptive-100-brain-v1"});
 });
 
 app.get("/api/health",(req,res)=>{
   res.json({
-    ok:true,version:"4.2.0",
+    ok:true,version:"5.0.0",
     tavilyConfigured:Boolean(process.env.TAVILY_API_KEY),
     geminiConfigured:Boolean(process.env.GEMINI_API_KEY),
     apiFootballConfigured:Boolean(process.env.API_FOOTBALL_KEY),
@@ -2502,7 +2651,7 @@ app.get("/api/provider-status",async(req,res)=>{
   const configured=providerConfigured();
   let openRouterFreeModelsCount=0;
   if(configured.openrouter){try{openRouterFreeModelsCount=(await openRouterFreeModels()).length;}catch{}}
-  res.json({ok:true,configured,usage:providerUsage,openRouterFreeModelsCount});
+  res.json({ok:true,configured,usage:providerUsage,health:providerHealthSnapshot(),openRouterFreeModelsCount});
 });
 
 app.get("/api/provider-test",async(req,res)=>{
@@ -2535,7 +2684,7 @@ app.post("/api/council-expand",async(req,res)=>{
 
     const fixture=cleanFixture(req.body?.fixture);
     const existingMembers=Array.isArray(req.body?.existingMembers)?req.body.existingMembers:[];
-    const targetSize=Math.max(existingMembers.length+1,Math.min(50,Number(req.body?.targetSize||existingMembers.length+5)));
+    const targetSize=Math.max(existingMembers.length+1,Math.min(100,Number(req.body?.targetSize||existingMembers.length+10)));
     const aiCouncil=await runAiCouncil({
       fixture,
       gate:req.body?.authenticityGate||{},
@@ -2559,7 +2708,7 @@ async function executeResearchJob(body,progressId){
   const originalMarket=String(body?.originalMarket||"").trim().slice(0,180);
   const previousRounds=Array.isArray(body?.previousRounds)?body.previousRounds:[];
   requireEnv("TAVILY_API_KEY");
-  const councilSize=Math.max(1,Math.min(20,Number(body?.councilSize||8)));
+  const councilSize=Math.max(1,Math.min(100,Number(body?.councilSize||8)));
 
   setResearchProgress(progressId,{percent:7,stage:"Fixture verification",stageNumber:2,totalStages:10,message:`Round ${round}: verifying team identities, competition, kickoff time and current fixture status.`});
   const gate=await buildBestAvailableGate(fixture,round);
@@ -2604,8 +2753,9 @@ async function executeResearchJob(body,progressId){
   const videoReview=await reviewYoutubeHighlights(videoCandidates,gate);
 
   const allScoutedLinks=flattenScoutLinks(webScout,videoScout);
-  setResearchProgress(progressId,{percent:59,stage:"Data analysis",stageNumber:6,totalStages:10,message:`Analyzing ${sources.length} deduplicated sources, structured evidence, contradictions and every realistic market family.`});
-  const analysis=await primaryAnalyzeWithFallback({fixture,round,originalMarket,previousRounds,sources,gate,videoReview,fallbackEvidence,temporalGuard});
+  const dataEngine=deterministicDataEngine({fixture,gate,sources,videoReview,temporalGuard});
+  setResearchProgress(progressId,{percent:59,stage:"Data analysis",stageNumber:6,totalStages:10,message:`Running local deterministic checks plus AI synthesis across ${sources.length} deduplicated sources.`});
+  const analysis=await primaryAnalyzeWithFallback({fixture,round,originalMarket,previousRounds,sources,gate,videoReview,fallbackEvidence,temporalGuard,dataEngine});
 
   if(analysis.dataAnalysis && videoReview.status!=="COMPLETE"){
     analysis.dataAnalysis.videoEvidenceScore=0;
@@ -2633,7 +2783,7 @@ async function executeResearchJob(body,progressId){
 
   setResearchProgress(progressId,{percent:70,stage:"AI Council",stageNumber:7,totalStages:10,message:temporalGuard.bettingAllowed?`Running the independent AI Council with up to ${councilSize} agent seat(s). Odds remain hidden.`:"Pre-match timing guard blocked the betting council; preserving the audit instead."});
   const aiCouncil=temporalGuard.bettingAllowed
-    ? await runAiCouncil({fixture,gate,sources,videoReview,fallbackEvidence},{targetSize:councilSize})
+    ? await runAiCouncil({fixture,gate,sources,videoReview,fallbackEvidence,dataEngine},{targetSize:councilSize})
     : {checkedAt:isoNow(),members:[],counts:{agentSeats:0,availableAgents:0,uniqueModels:0,specialistAgents:0},
        aggregation:{availableModels:0,unresolvedModels:0,convergence:"BLOCKED",consensusMarket:"BLOCKED BY TEMPORAL GUARD",
        consensusCanonicalKey:"",modelsAgreeing:[],medianFairProbabilityPct:null,groups:[],note:temporalGuard.reason}};
@@ -2681,6 +2831,7 @@ async function executeResearchJob(body,progressId){
     queries,videoQueries,sources,
     authenticityGate:gate,videoReview,fallbackEvidence,
     sourceAudit:{webScout,videoScout,allScoutedLinks},
+    dataEngine,
     temporalGuard,
     aiCouncil,externalBenchmarks,finalConvergence,
     oddsSnapshot:{
@@ -2748,4 +2899,4 @@ app.use((req,res)=>{
   res.setHeader("Cache-Control","no-cache, no-store, must-revalidate");
   res.sendFile(path.join(__dirname,"public","index.html"));
 });
-app.listen(PORT,()=>console.log(`Football Fact-First Research v4.2 running on port ${PORT}`));
+app.listen(PORT,()=>console.log(`Football Fact-First Research v5.0 running on port ${PORT}`));
