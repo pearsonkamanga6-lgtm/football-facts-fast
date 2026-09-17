@@ -447,26 +447,31 @@ function parseWebDateCandidates(text){
 function parseWebKickoffCandidates(text,date){
   const s=String(text||"");
   const out=[];
-  const pushUtc=(hh,mm)=>{
-    const h=Number(hh),m=Number(mm||0);
+  const addIso=(iso)=>{
+    const t=Date.parse(iso);if(!Number.isFinite(t))return;
+    const d=new Date(t).toISOString();if(d.slice(0,10)===date)out.push(d.replace(".000Z","Z"));
+  };
+  const pushUtc=(hh,mm,ampm="")=>{
+    let h=Number(hh),m=Number(mm||0);
+    if(ampm){const ap=String(ampm).toLowerCase();if(ap==="pm"&&h<12)h+=12;if(ap==="am"&&h===12)h=0;}
     if(h>=0&&h<24&&m>=0&&m<60)out.push(`${date}T${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:00Z`);
   };
-  const pushOffset=(hh,mm,ampm,offsetHours)=>{
+  const pushOffset=(hh,mm,ampm,offsetHours,offsetMinutes=0)=>{
     let h=Number(hh),m=Number(mm||0);
-    if(ampm){
-      const ap=String(ampm).toLowerCase();
-      if(ap==="pm"&&h<12)h+=12;
-      if(ap==="am"&&h===12)h=0;
-    }
-    const utcH=h-offsetHours;
+    if(ampm){const ap=String(ampm).toLowerCase();if(ap==="pm"&&h<12)h+=12;if(ap==="am"&&h===12)h=0;}
+    if(h<0||h>23||m<0||m>59)return;
     const dt=new Date(`${date}T00:00:00Z`);
-    dt.setUTCHours(utcH,m,0,0);
-    out.push(dt.toISOString().replace(".000Z","Z"));
+    const totalOffset=Number(offsetHours)*60+(Number(offsetHours)>=0?Number(offsetMinutes):-Number(offsetMinutes));
+    dt.setUTCMinutes(h*60+m-totalOffset);out.push(dt.toISOString().replace(".000Z","Z"));
   };
-
+  for(const m of s.matchAll(/\b(20\d{2}-\d{2}-\d{2}T\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2}))\b/gi))addIso(m[1]);
   for(const m of s.matchAll(/\b(\d{1,2}):(\d{2})(?::\d{2})?\s*(UTC|GMT)\b/gi))pushUtc(m[1],m[2]);
-  for(const m of s.matchAll(/\b(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)\s*(SGT|Singapore Time)\b/gi))pushOffset(m[1],m[2]||"00",m[3],8);
-  return [...new Set(out)];
+  for(const m of s.matchAll(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*(UTC|GMT)\b/gi))pushUtc(m[1],m[2]||"00",m[3]);
+  for(const m of s.matchAll(/\b(\d{1,2}):(\d{2})(?::\d{2})?\s*(?:[A-Z]{2,5}\s*)?\(\s*UTC([+-])(\d{1,2})(?::?(\d{2}))?\s*\)/g)){
+    const sign=m[3]==="-"?-1:1;pushOffset(m[1],m[2],"",sign*Number(m[4]),Number(m[5]||0));
+  }
+  for(const m of s.matchAll(/\b(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)\s*(SGT|Singapore Time)\b/gi))pushOffset(m[1],m[2]||"00",m[3],8,0);
+  return [...new Set(out)].filter(x=>x.startsWith(date+"T"));
 }
 function kickoffMinuteKey(iso){
   const t=Date.parse(iso);
@@ -832,107 +837,21 @@ async function buildAuthenticityGate(fixtureText,round){
 
 function fixtureTemporalGuard(gate){
   const f=gate?.fixture;
-  if(!f?.date){
-    return {
-      mode:"UNKNOWN",bettingAllowed:false,fixtureDate:"",
-      reason:"Fixture kickoff time could not be verified. Pre-match betting conclusions are blocked until the fixture is verified."
-    };
-  }
-  const status=String(f.status||"").toLowerCase();
-  const now=Date.now();
+  if(!f?.date)return {mode:"UNKNOWN",bettingAllowed:false,researchAllowed:true,fixtureDate:"",reason:"Fixture kickoff time could not be verified. Betting/value conclusions are blocked, but evidence analysis may continue in research-only mode."};
+  const status=String(f.status||"").toLowerCase(),now=Date.now();
   if(f.dateOnly){
     const fixtureDay=String(f.date).slice(0,10),today=zambiaDate(0);
-    if(fixtureDay>today){
-      return {mode:"PREMATCH_WEB_VERIFIED",bettingAllowed:true,fixtureDate:f.date,verification:f.verification||"WEB",reason:`Future fixture date ${fixtureDay} was verified by multiple independent sources; exact kickoff clock time is not structured.`};
-    }
-    if(fixtureDay===today){
-      return {mode:"UNKNOWN",bettingAllowed:false,fixtureDate:f.date,verification:f.verification||"WEB",reason:"The fixture date is verified as today, but the exact kickoff clock time is not verified. Betting conclusions remain blocked."};
-    }
-    return {mode:"POST_MATCH_AUDIT",bettingAllowed:false,fixtureDate:f.date,verification:f.verification||"WEB",reason:"The independently verified fixture date is already in the past. Post-match evidence cannot be used as a pre-match prediction."};
+    if(fixtureDay>today)return {mode:"PREMATCH_WEB_VERIFIED",bettingAllowed:true,researchAllowed:true,fixtureDate:f.date,verification:f.verification||"WEB",reason:`Future fixture date ${fixtureDay} was verified by multiple independent sources; exact kickoff clock time is not structured.`};
+    if(fixtureDay===today)return {mode:"UNKNOWN",bettingAllowed:false,researchAllowed:true,fixtureDate:f.date,verification:f.verification||"WEB",reason:"The fixture date is verified as today, but the exact kickoff clock time is not verified. Betting/value conclusions remain blocked; research-only analysis may continue."};
+    return {mode:"POST_MATCH_AUDIT",bettingAllowed:false,researchAllowed:false,fixtureDate:f.date,verification:f.verification||"WEB",reason:"The independently verified fixture date is already in the past. Post-match evidence cannot be used as a pre-match prediction."};
   }
-  const kickoff=Date.parse(f.date);
-  const futureStatuses=["not started","ns","time to be defined","tbd","scheduled","timed"];
-  const finished=/finished|match finished|\bft\b|after extra time|penalties/i.test(status);
-  const live=/first half|second half|halftime|extra time|penalt|live|in play/i.test(status);
-
-  if(finished || live || (Number.isFinite(kickoff) && kickoff <= now-5*60*1000)){
-    return {
-      mode:finished?"POST_MATCH_AUDIT":"LIVE_OR_STARTED",
-      bettingAllowed:false,fixtureDate:f.date,
-      reason:finished
-        ?"This fixture has already finished. Post-match evidence must not be used as if it were a pre-match prediction."
-        :"This fixture has started or its verified kickoff has passed. New betting recommendations/value analysis are blocked."
-    };
-  }
-  if(Number.isFinite(kickoff) && kickoff>now){
-    return {mode:"PREMATCH",bettingAllowed:true,fixtureDate:f.date,reason:"Verified fixture is still in the future."};
-  }
-  if(futureStatuses.some(s=>status.includes(s))){
-    return {mode:"PREMATCH",bettingAllowed:true,fixtureDate:f.date,reason:"Fixture status indicates it has not started."};
-  }
-  return {mode:"UNKNOWN",bettingAllowed:false,fixtureDate:f.date,reason:"Fixture timing/status is ambiguous; betting conclusions are blocked."};
+  const kickoff=Date.parse(f.date),futureStatuses=["not started","ns","time to be defined","tbd","scheduled","timed","web-verified scheduled fixture"];
+  const finished=/finished|match finished|\bft\b|after extra time|penalties/i.test(status),live=/first half|second half|halftime|extra time|penalt|live|in play/i.test(status);
+  if(finished||live||(Number.isFinite(kickoff)&&kickoff<=now-5*60*1000))return {mode:finished?"POST_MATCH_AUDIT":"LIVE_OR_STARTED",bettingAllowed:false,researchAllowed:false,fixtureDate:f.date,reason:finished?"This fixture has already finished. Post-match evidence must not be used as if it were a pre-match prediction.":"This fixture has started or its verified kickoff has passed. New pre-match council/value analysis is blocked."};
+  if(Number.isFinite(kickoff)&&kickoff>now)return {mode:"PREMATCH",bettingAllowed:true,researchAllowed:true,fixtureDate:f.date,reason:"Verified fixture is still in the future."};
+  if(futureStatuses.some(s=>status.includes(s)))return {mode:"PREMATCH",bettingAllowed:true,researchAllowed:true,fixtureDate:f.date,reason:"Fixture status indicates it has not started."};
+  return {mode:"UNKNOWN",bettingAllowed:false,researchAllowed:true,fixtureDate:f.date,reason:"Fixture timing/status is ambiguous. Betting/value conclusions are blocked; research-only analysis may continue."};
 }
-
-function structuredDigest(gate){
-  if(!gate) return "Unavailable";
-  const playerList = side => (gate.squads?.[side]?.players||[]).map(p=>`${p.name} (${p.position||"?"})`).join(", ");
-  const lineupText=(gate.fixture?.lineups||[]).map(l=>`${l.team}: ${l.startXI.join(", ")} | Bench: ${l.substitutes.join(", ")}`).join("\n");
-  const injuryText=(gate.injuries||[]).map(x=>`${x.team}: ${x.player} — ${x.type}${x.reason?` (${x.reason})`:""}`).join("\n");
-  const transferText=(gate.transfers||[]).map(x=>`${x.date}: ${x.player} ${x.from} -> ${x.to} [${x.type}]`).join("\n");
-  return `
-AUTHENTICITY STATUS: ${gate.status}
-CHECKED AT: ${gate.checkedAt}
-REQUESTED: ${gate.requested?.home||"?"} vs ${gate.requested?.away||"?"}
-RESOLVED HOME: ${gate.resolved?.home?.name||"unresolved"} (confidence ${gate.resolved?.home?.confidence??0})
-RESOLVED AWAY: ${gate.resolved?.away?.name||"unresolved"} (confidence ${gate.resolved?.away?.confidence??0})
-FIXTURE: ${JSON.stringify(gate.fixture)}
-CURRENT HOME SQUAD: ${playerList("home")}
-CURRENT AWAY SQUAD: ${playerList("away")}
-CURRENT INJURIES/SUSPENSIONS:
-${injuryText||"None returned / unavailable"}
-CONFIRMED LINEUPS:
-${lineupText||"Not available"}
-RECENT TRANSFERS (extra check on Relearn rounds):
-${transferText||"Not queried in this round or none returned"}
-WARNINGS: ${(gate.warnings||[]).join(" | ")||"None"}
-`;
-}
-
-
-
-function zambiaDate(offsetDays=0){
-  const d=new Date(Date.now()+offsetDays*86400000);
-  // Africa/Lusaka is UTC+2 and has no DST.
-  const local=new Date(d.getTime()+2*3600000);
-  return local.toISOString().slice(0,10);
-}
-
-function coverageObjectForSeason(leagueResponse, season){
-  const item=(leagueResponse?.data?.response||[])[0];
-  const seasons=item?.seasons||[];
-  const s=seasons.find(x=>Number(x.year)===Number(season)) || seasons.find(x=>x.current) || seasons.at(-1);
-  return s?.coverage||null;
-}
-function bool(v){return v===true}
-function coverageScore(coverage){
-  if(!coverage)return {score:0,parts:[],note:"No league-season coverage object returned."};
-  const fx=coverage.fixtures||{};
-  const weights=[
-    ["events",bool(fx.events),10],
-    ["lineups",bool(fx.lineups),16],
-    ["fixture statistics",bool(fx.statistics_fixtures),16],
-    ["player statistics",bool(fx.statistics_players),10],
-    ["players",bool(coverage.players),8],
-    ["injuries",bool(coverage.injuries),14],
-    ["predictions",bool(coverage.predictions),8],
-    ["standings",bool(coverage.standings),5],
-    ["top scorers/assists/cards",bool(coverage.top_scorers)||bool(coverage.top_assists)||bool(coverage.top_cards),5]
-  ];
-  let score=0,total=weights.reduce((a,x)=>a+x[2],0),parts=[];
-  for(const [name,ok,w] of weights){if(ok)score+=w;parts.push({name,available:ok,weight:w});}
-  return {score:Math.round(score/total*100),parts,note:"Odds coverage is deliberately excluded from discovery scoring."};
-}
-
 async function footballDataOrg(pathname,params={}){
   const key=requireEnv("FOOTBALL_DATA_ORG_KEY");
   usageStart("footballDataOrg");
@@ -1873,6 +1792,59 @@ function upgradeGateWithWarehouse(gate,fixtureText,warehouse){
   if(next.resolved.home)next.resolved.home={...next.resolved.home,name:home,confidence:Math.max(Number(next.resolved.home.confidence||0),0.95),identityVerification:"WEB_FIXTURE_CONSENSUS"};
   if(next.resolved.away)next.resolved.away={...next.resolved.away,name:away,confidence:Math.max(Number(next.resolved.away.confidence||0),0.95),identityVerification:"WEB_FIXTURE_CONSENSUS"};
   next.warnings=(next.warnings||[]).filter(x=>!/fixture verification did not complete|did not find this matchup|kickoff/i.test(String(x)));next.warnings.push(exact?`Exact kickoff independently verified from ${e.domains} web domain(s) in the research warehouse.`:`Fixture date independently verified from ${e.domains} web domain(s); exact kickoff clock time still needs confirmation.`);
+  return next;
+}
+
+async function rescueExactKickoff({fixture,gate,warehouse,progressId}){
+  const home=gate?.requested?.home||gate?.resolved?.home?.name||"";
+  const away=gate?.requested?.away||gate?.resolved?.away?.name||"";
+  const targetDate=String(gate?.fixture?.date||"").slice(0,10);
+  if(!home||!away||!targetDate)return null;
+  const querySet=[
+    `"${home}" "${away}" "${targetDate}" kickoff UTC`,
+    `"${home}" "${away}" "${targetDate}" start time`,
+    `site:fotmob.com "${home}" "${away}"`,
+    `site:aiscore.com "${home}" "${away}"`,
+    `site:ogscore.com "${home}" "${away}"`
+  ];
+  const byUrl=new Map();
+  for(let i=0;i<querySet.length;i++){
+    if(progressId)setResearchProgress(progressId,{percent:57,stage:"Kickoff verification",stageNumber:5,totalStages:12,message:`Targeted kickoff verification ${i+1}/${querySet.length}: ${querySet[i].slice(0,110)}`});
+    const groups=await searchFleet(querySet[i],{providersPerTask:4,maxResultsPerProvider:8});
+    for(const g of groups)for(const r of g.results||[]){
+      const txt=`${r.title||""} ${r.content||""} ${r.url||""}`;
+      if(!strictTextMentionsTeam(txt,home)||!strictTextMentionsTeam(txt,away))continue;
+      const u=safePublicUrl(r.url);if(!u)continue;
+      if(!byUrl.has(u.href))byUrl.set(u.href,{...r,url:u.href,provider:r.provider||g.provider});
+    }
+  }
+  for(const x of warehouse?.entries||[]){
+    if(!x.usable||x.relevant===false)continue;
+    const txt=`${x.title||""} ${x.snippet||""} ${x.extractedText||""} ${x.url||""}`;
+    if(strictTextMentionsTeam(txt,home)&&strictTextMentionsTeam(txt,away))byUrl.set(x.url,{title:x.pageTitle||x.title,url:x.url,content:x.extractedText||x.snippet||"",provider:x.provider||"warehouse"});
+  }
+  const records=[];
+  for(const c of [...byUrl.values()].slice(0,24)){
+    let txt=`${c.title||""} ${c.content||""}`;
+    let times=parseWebKickoffCandidates(txt,targetDate);
+    if(!times.length){const p=await readPublicPage(c.url);if(p.ok){txt=`${p.title||""} ${p.content||""}`;if(strictTextMentionsTeam(txt,home)&&strictTextMentionsTeam(txt,away))times=parseWebKickoffCandidates(txt,targetDate);}}
+    if(!times.length)continue;
+    const domain=sourceDomain(c.url);
+    for(const kickoff of times)records.push({kickoff,domain,url:c.url,title:c.title||"",reliability:sourceReliability(sourceKind(c.url,c.title||"","kickoff verification"))});
+  }
+  const groups=new Map();
+  for(const r of records){const key=kickoffMinuteKey(r.kickoff);if(!key)continue;if(!groups.has(key))groups.set(key,[]);groups.get(key).push(r);}
+  const ranked=[...groups.entries()].map(([key,rows])=>({key,rows,domains:[...new Set(rows.map(x=>x.domain).filter(Boolean))],bestReliability:Math.max(0,...rows.map(x=>x.reliability||0))})).sort((a,b)=>b.domains.length-a.domains.length||b.bestReliability-a.bestReliability);
+  const best=ranked[0];if(!best||best.domains.length<2)return null;
+  return {kickoff:best.rows[0].kickoff,domains:best.domains,sources:best.rows,confidence:best.domains.length>=3?0.99:0.97,method:"TARGETED_KICKOFF_WEB_CONSENSUS"};
+}
+function applyKickoffRescueToGate(gate,rescue){
+  if(!rescue?.kickoff)return gate;
+  const next={...gate,fixture:{...(gate?.fixture||{})}};
+  next.fixture.date=rescue.kickoff;next.fixture.timestamp=Math.floor(Date.parse(rescue.kickoff)/1000);next.fixture.dateOnly=false;
+  next.fixture.verification="TARGETED_KICKOFF_WEB_CONSENSUS";next.fixture.verificationConfidence=rescue.confidence||0.97;next.fixture.verificationSources=rescue.sources||[];
+  next.fixture.status=next.fixture.status||"Web-verified scheduled fixture";next.fixture.statusShort=next.fixture.statusShort||"WEB";next.status="VERIFIED";
+  next.warnings=(next.warnings||[]).filter(x=>!/exact kickoff|clock time|kickoff/i.test(String(x)));next.warnings.push(`Exact kickoff verified by ${rescue.domains.length} independent web domains.`);
   return next;
 }
 
@@ -3202,12 +3174,12 @@ Do not add markdown or commentary outside the JSON.`;
 
 app.get("/api/version",(req,res)=>{
   res.setHeader("Cache-Control","no-store");
-  res.json({ok:true,version:"6.2.0",protocol:"adaptive-100-brain-v1"});
+  res.json({ok:true,version:"6.3.0",protocol:"adaptive-100-brain-v1"});
 });
 
 app.get("/api/health",(req,res)=>{
   res.json({
-    ok:true,version:"6.2.0",
+    ok:true,version:"6.3.0",
     tavilyConfigured:Boolean(process.env.TAVILY_API_KEY),
     builtinSearchEnabled:true,
     searchFleetProviders:["Google HTML best-effort","Bing HTML","DuckDuckGo HTML",...(process.env.TAVILY_API_KEY?["Tavily"]:[])],
@@ -3338,6 +3310,10 @@ async function executeResearchJob(body,progressId){
   const researchWarehouse=await buildResearchWarehouse({fixture,gate,round,mode:researchMode,progressId});
 
   gate=upgradeGateWithWarehouse(gate,fixture,researchWarehouse);
+  if(gate?.fixture?.dateOnly){
+    const kickoffRescue=await rescueExactKickoff({fixture,gate,warehouse:researchWarehouse,progressId});
+    if(kickoffRescue)gate=applyKickoffRescueToGate(gate,kickoffRescue);
+  }
   const temporalGuard=fixtureTemporalGuard(gate);
 
   const sources=warehouseSources(researchWarehouse,researchMode==="maximum"?60:44);
@@ -3380,28 +3356,25 @@ async function executeResearchJob(body,progressId){
     analysis.remainingDanger=`Authenticity gate failed: ${(gate.warnings||[]).join(" ")}`;
   }
   if(!temporalGuard.bettingAllowed){
+    analysis.researchOnlyCandidates=[...(analysis.shortlist||[])];
     analysis.finalMarket=temporalGuard.mode==="POST_MATCH_AUDIT"?"POST-MATCH AUDIT ONLY":"NO PRE-MATCH BET — TIMING NOT VERIFIED";
     analysis.classification="UNRESOLVED / HIGH RISK";
     analysis.originalMarketComparison="";
     analysis.remainingDanger=temporalGuard.reason;
-    analysis.shortlist=[];
-    if(analysis.dataAnalysis)analysis.dataAnalysis.marketScores=[];
-    analysis.marketScreen=[];
     analysis.whyFinal=temporalGuard.reason;
   }
 
-  setResearchProgress(progressId,{percent:77,stage:"AI Council",stageNumber:9,totalStages:12,message:temporalGuard.bettingAllowed?`Running the independent AI Council with up to ${councilSize} agent seat(s). Odds remain hidden.`:"Pre-match timing guard blocked the betting council; preserving the audit instead."});
-  const aiCouncil=temporalGuard.bettingAllowed
+  setResearchProgress(progressId,{percent:77,stage:"AI Council",stageNumber:9,totalStages:12,message:temporalGuard.researchAllowed?`Running the independent AI Council with up to ${councilSize} agent seat(s). Odds remain hidden.${temporalGuard.bettingAllowed?"":" Research-only mode: no betting/value conclusion will be released."}`:"Council blocked because the fixture is already live/finished."});
+  const aiCouncil=temporalGuard.researchAllowed
     ? await runAiCouncil({fixture,gate,sources,videoReview,fallbackEvidence,dataEngine},{targetSize:councilSize})
-    : {checkedAt:isoNow(),members:[],counts:{agentSeats:0,availableAgents:0,uniqueModels:0,specialistAgents:0},
-       aggregation:{availableModels:0,unresolvedModels:0,convergence:"BLOCKED",consensusMarket:"BLOCKED BY TEMPORAL GUARD",
-       consensusCanonicalKey:"",modelsAgreeing:[],medianFairProbabilityPct:null,groups:[],note:temporalGuard.reason}};
+    : {checkedAt:isoNow(),members:[],counts:{agentSeats:0,availableAgents:0,uniqueModels:0,specialistAgents:0},aggregation:{availableModels:0,unresolvedModels:0,convergence:"BLOCKED",consensusMarket:"BLOCKED BY TEMPORAL GUARD",consensusCanonicalKey:"",modelsAgreeing:[],medianFairProbabilityPct:null,groups:[],note:temporalGuard.reason}};
+  if(aiCouncil&&temporalGuard.researchAllowed&&!temporalGuard.bettingAllowed){aiCouncil.researchOnly=true;aiCouncil.researchOnlyReason=temporalGuard.reason;}
 
-  setResearchProgress(progressId,{percent:86,stage:"External benchmarks",stageNumber:10,totalStages:12,message:temporalGuard.bettingAllowed?"Extracting actual current predictions and published reasoning from external benchmark sources.":"External predictions blocked by the pre-match integrity guard."});
-  const externalBenchmarks=temporalGuard.bettingAllowed
+  setResearchProgress(progressId,{percent:86,stage:"External benchmarks",stageNumber:10,totalStages:12,message:temporalGuard.researchAllowed?"Extracting actual current predictions and published reasoning from external benchmark sources.":"External predictions blocked because the fixture is already live/finished."});
+  const externalBenchmarks=temporalGuard.researchAllowed
     ? await externalPredictionBenchmarks(fixture,gate)
-    : {checkedAt:isoNow(),websites:[],apiFootball:{available:false},consensus:{status:"BLOCKED",availablePredictions:0},
-       rule:`Blocked: ${temporalGuard.reason}`};
+    : {checkedAt:isoNow(),websites:[],apiFootball:{available:false},consensus:{status:"BLOCKED",availablePredictions:0},rule:`Blocked: ${temporalGuard.reason}`};
+  if(externalBenchmarks&&temporalGuard.researchAllowed&&!temporalGuard.bettingAllowed){externalBenchmarks.researchOnly=true;externalBenchmarks.rule=`Research-only benchmark extraction. ${temporalGuard.reason}`;}
 
   setResearchProgress(progressId,{percent:93,stage:"Odds & value audit",stageNumber:11,totalStages:12,message:temporalGuard.bettingAllowed?"Sporting analysis is complete. Only now checking available prices and potential value.":"Odds/value stage blocked because this is not a verified pre-match fixture."});
   const oddsSnapshot=temporalGuard.bettingAllowed
@@ -3509,4 +3482,4 @@ app.use((req,res)=>{
   res.setHeader("Cache-Control","no-cache, no-store, must-revalidate");
   res.sendFile(path.join(__dirname,"public","index.html"));
 });
-app.listen(PORT,()=>console.log(`Football Fact-First Research v6.2 running on port ${PORT}`));
+app.listen(PORT,()=>console.log(`Football Fact-First Research v6.3 running on port ${PORT}`));

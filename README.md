@@ -1,4 +1,4 @@
-# Football Fact-First Research v6.2 — Render-Safe Research Engine
+# Football Fact-First Research v6.3 — Exact Kickoff Rescue
 
 This release is a structural upgrade rather than another small patch. It is designed around the failures exposed during live testing: API quotas, provider outages, fixture-verification gaps, stale browser versions, and the risk of treating many specialist prompts as many independent models.
 
@@ -215,3 +215,10 @@ Changes:
 - Progress stage counts are consistently 12.
 
 The research philosophy remains unchanged: broad discovery first, then ranked page reading, evidence cleaning, analysis, AI council, external benchmarks and odds last.
+
+
+## v6.3 — Exact Kickoff Rescue + Research-Only Council
+
+The v6.2 Maccabi Kabilio Jaffa vs Maccabi Bney Reine test exposed a temporal-state mismatch: the evidence layer contained a precise fixture time while the Authenticity Gate still stored a date-only midnight placeholder.
+
+v6.3 adds ISO/UTC/offset kickoff parsing, a targeted exact-kickoff rescue pass across multiple search routes, two-domain time consensus, and a research-only fallback that lets the AI Council and external benchmark extraction continue without releasing betting/value conclusions when clock time remains ambiguous. Live/started/finished fixtures remain blocked from new pre-match council/value analysis.
