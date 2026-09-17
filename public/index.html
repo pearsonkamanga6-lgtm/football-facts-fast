@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#071923">
-<title>Football Fact-First Research v6.0</title>
+<title>Football Fact-First Research v6.1</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon-192.png">
 <style>
@@ -49,7 +49,7 @@
 </head>
 <body>
 <div class="app">
-<div class="top"><div class="brand"><h1>⚽ Football Fact-First Research <span class="pill VERIFIED">v6.0</span></h1><small>Football Intelligence Research Engine • multi-search fleet • page reading • evidence warehouse • 100-brain council</small></div><div class="badge" id="healthBadge">Checking engine…</div></div>
+<div class="top"><div class="brand"><h1>⚽ Football Fact-First Research <span class="pill VERIFIED">v6.1</span></h1><small>Football Intelligence Research Engine • relevance firewall • clean evidence warehouse • 100-brain council</small></div><div class="badge" id="healthBadge">Checking engine…</div></div>
 <div class="tabs"><button class="tab active" data-tab="session">Research Session</button><button class="tab" data-tab="postboard">POSTBOARD</button><button class="tab" data-tab="history">History</button><button class="tab" data-tab="settings">Setup</button></div>
 
 <section id="tab-session">
@@ -125,7 +125,7 @@ Leave blank for pure market discovery."></textarea></div>
 
 <section id="tab-settings" class="hidden">
 <div class="panel">
-<h2>Research engine setup <span class="pill VERIFIED">v6.0</span></h2><p class="tiny muted">v6.0 adds a multi-search research fleet, page reading, a structured evidence warehouse, a research-question ledger, deduplication, saturation detection and resilient timeouts. If you still see an older version after deploy, close the tab and reopen the Render URL.</p>
+<h2>Research engine setup <span class="pill VERIFIED">v6.1</span></h2><p class="tiny muted">v6.1 keeps the multi-search fleet but adds a strict relevance firewall, cleaner source scoring, rejected-source auditing, semantic council convergence and stronger external-prediction extraction. If you still see an older version after deploy, close the tab and reopen the Render URL.</p>
 <p>Add these Environment Variables in Render. Keep all keys on the server, never in the browser:</p>
 <ul>
 <li><code>API_FOOTBALL_KEY</code> — structured football facts, predictions and bookmaker odds.</li>
@@ -154,7 +154,7 @@ Leave blank for pure market discovery."></textarea></div>
 </div>
 
 <script>
-const APP_VERSION="6.0.0";
+const APP_VERSION="6.1.0";
 const KEY="footballFactFirstResearch_v2";
 let state=loadState();let activeSession=null;
 function loadState(){try{return JSON.parse(localStorage.getItem(KEY))||{sessions:[]}}catch{return{sessions:[]}}}
@@ -453,7 +453,7 @@ function allSourcesHtml(round){
  const audit=round.sourceAudit||{},links=audit.allScoutedLinks||[];
  if(!links.length)return `<p class="tiny muted">No source-audit links recorded.</p>`;
  return `<p class="tiny muted">Every unique link returned by the scouting searches is listed below, whether or not it was ultimately used in the final conclusion.</p>
- ${links.map((x,i)=>`<a class="source" href="${esc(x.url)}" target="_blank" rel="noopener">#${i+1} [${esc(x.category||"web")}] ${esc(x.title||x.url)}</a><div class="tiny muted" style="margin:0 0 7px 0">Query: ${esc(x.query||"")}${x.published_date?` • Date: ${esc(x.published_date)}`:""}</div>`).join("")}`;
+ ${links.map((x,i)=>`<a class="source" href="${esc(x.url)}" target="_blank" rel="noopener">#${i+1} [${esc(x.category||"web")}] ${esc(x.title||x.url)}</a><div class="tiny muted" style="margin:0 0 7px 0">Status: ${esc(x.status||"SCOUTED")} • Query: ${esc(x.query||"")}${x.reason?` • Reason: ${esc(x.reason)}`:""}${x.published_date?` • Date: ${esc(x.published_date)}`:""}</div>`).join("")}`;
 }
 function videoReviewHtml(round){
  const v=round.videoReview||{status:"UNAVAILABLE",videos:[]};
@@ -494,7 +494,7 @@ function dataEngineHtml(round){
    <div class="score-grid">
     ${[["Identity",e.identityScore],["Fixture verification",e.fixtureVerificationScore],["Squad coverage",e.squadCoverageScore],["Source diversity",e.sourceDiversityScore],["Video support",e.videoSupportScore]].map(([k,v])=>`<div class="score-card"><span class="tiny muted">${esc(k)}</span><div class="score-big">${esc(v??0)}/100</div></div>`).join("")}
    </div>
-   ${sig?`<p><strong>Strongest explicit multi-source signal:</strong> ${esc(sig.market)} • support ${esc(sig.supportScore)}/100 • ${esc(sig.supportingDomains)} independent domain(s)</p>`:`<p class="tiny muted">No exact market wording repeated strongly enough across independent sources.</p>`}
+   ${sig?`<p><strong>${sig.supportingDomains>=2?"Strongest explicit multi-source signal":"Weak single-source market mention"}:</strong> ${esc(sig.market)} • support ${esc(sig.supportScore)}/100 • ${esc(sig.supportingDomains)} independent domain(s)</p>`:`<p class="tiny muted">No exact market wording repeated strongly enough across independent sources.</p>`}
    <p class="tiny muted">${esc(e.note||"")}</p>
    ${(e.explicitMarketSignals||[]).length?`<details><summary>Deterministic exact-market signals</summary>${e.explicitMarketSignals.slice(0,10).map(x=>`<div class="benchmark-card"><strong>${esc(x.market)}</strong> — ${esc(x.supportScore)}/100 • ${esc(x.supportingDomains)} domains • ${esc(x.mentions)} mentions</div>`).join("")}</details>`:""}
  </div>`;
@@ -669,7 +669,7 @@ function warehouseHtml(round){
      ["Discovered",s.discovered||0],["Opened",s.opened||0],["Usable",s.usable||0],
      ["Independent domains",s.independentDomains||0],["Content families",s.independentContentFamilies||0],["Duplicates removed",s.duplicatesRemoved||0]
    ].map(([k,v])=>`<div class="score-card"><span class="tiny muted">${esc(k)}</span><div class="score-big">${esc(v)}</div></div>`).join("")}</div>
-   <p class="tiny muted">Source mix: ${esc(kindText||"No classified sources")} • Page errors: ${esc(s.pageErrors||0)} • Saturation reached: ${s.saturationReached?"YES":"NO"}</p>
+   <p class="tiny muted">Source mix: ${esc(kindText||"No classified sources")} • Page errors: ${esc(s.pageErrors||0)} • Irrelevant results rejected: ${esc(s.rejectedIrrelevant||0)} • Saturation reached: ${s.saturationReached?"YES":"NO"}</p>
    <details><summary>Research question ledger (${ledger.length})</summary><div class="coverage">${ledger.map(q=>`<div class="cov ${esc(q.status||"unavailable")}"><strong>${esc(q.id||"")}: ${esc(q.question||q.category||"Research question")}</strong><br><span class="tiny muted">${esc(q.status||"pending")} • ${esc(q.domains||0)} domain(s) • ${esc(q.results||0)} result(s)</span></div>`).join("")}</div></details>
  </div>`;
 }
