@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#071923">
-<title>Football Fact-First Research v4.2</title>
+<title>Football Fact-First Research v5.0</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon-192.png">
 <style>
@@ -49,7 +49,7 @@
 </head>
 <body>
 <div class="app">
-<div class="top"><div class="brand"><h1>⚽ Football Fact-First Research <span class="pill VERIFIED">v4.2</span></h1><small>Primary AI failover router • Gemini quota protection • head-to-head verification • async research</small></div><div class="badge" id="healthBadge">Checking engine…</div></div>
+<div class="top"><div class="brand"><h1>⚽ Football Fact-First Research <span class="pill VERIFIED">v5.0</span></h1><small>100-brain adaptive council • provider circuit breakers • multi-source fixture verification • local data engine</small></div><div class="badge" id="healthBadge">Checking engine…</div></div>
 <div class="tabs"><button class="tab active" data-tab="session">Research Session</button><button class="tab" data-tab="postboard">POSTBOARD</button><button class="tab" data-tab="history">History</button><button class="tab" data-tab="settings">Setup</button></div>
 
 <section id="tab-session">
@@ -90,10 +90,11 @@ Leave blank for pure market discovery."></textarea></div>
 <div><label><strong>Initial AI Council size</strong></label>
 <select id="councilSize" style="width:100%;background:#071923;color:var(--text);border:1px solid #285062;border-radius:11px;padding:11px">
 <option value="5">5 agents — light</option><option value="8" selected>8 agents — balanced</option>
-<option value="12">12 agents — deep</option><option value="20">20 agents — heavy free-quota use</option>
+<option value="12">12 agents — deep</option><option value="20">20 agents — very deep</option>
+<option value="50">50-agent ceiling — adaptive</option><option value="100">100-agent ceiling — maximum adaptive council</option>
 </select></div>
-<div><label><strong>50-brain expansion</strong></label>
-<div class="status warn" style="margin-top:0">After a result, add +5 or +10 agent seats up to 50. The app shows <strong>unique models</strong> separately from <strong>specialist agents</strong>.</div></div>
+<div><label><strong>100-brain adaptive council</strong></label>
+<div class="status warn" style="margin-top:0">The ceiling is <strong>100 agent seats</strong>. Research expands in waves and can stop early when independent underlying models converge. The app keeps <strong>agent consensus</strong> separate from <strong>unique-model consensus</strong> so repeated specialist prompts cannot fake agreement.</div></div>
 </div>
 <div class="notice tiny" style="margin-top:12px"><strong>Facts first, odds last:</strong> current squads, fixture identity, statistics, web sources and video evidence are researched before bookmaker prices are fetched. Every realistic market family is screened. Only after the sporting shortlist exists does the app compare available prices and flag any <strong>potential value</strong> where its estimated fair probability is meaningfully above the market break-even probability.</div>
 <div class="actions"><button class="primary" id="startBtn">Start Verified Research</button><button class="secondary" id="clearBtn">Clear Form</button></div>
@@ -116,7 +117,7 @@ Leave blank for pure market discovery."></textarea></div>
 
 <section id="tab-settings" class="hidden">
 <div class="panel">
-<h2>Research engine setup <span class="pill VERIFIED">v4.2</span></h2><p class="tiny muted">v4.0 resolves bookmaker-style club names before fixture verification and keeps the live stage-by-stage tracker for every research round, including Round 2 and later. If you still see an older version after deploy, close the tab and reopen the Render URL.</p>
+<h2>Research engine setup <span class="pill VERIFIED">v5.0</span></h2><p class="tiny muted">v5.0 adds an adaptive 100-agent ceiling, provider cooldown/circuit breakers, multi-source web fixture verification, and a local deterministic data engine that remains available when cloud AI quotas are exhausted. If you still see an older version after deploy, close the tab and reopen the Render URL.</p>
 <p>Add these Environment Variables in Render. Keep all keys on the server, never in the browser:</p>
 <ul>
 <li><code>API_FOOTBALL_KEY</code> — structured football facts, predictions and bookmaker odds.</li>
@@ -145,7 +146,7 @@ Leave blank for pure market discovery."></textarea></div>
 </div>
 
 <script>
-const APP_VERSION="4.2.0";
+const APP_VERSION="5.0.0";
 const KEY="footballFactFirstResearch_v2";
 let state=loadState();let activeSession=null;
 function loadState(){try{return JSON.parse(localStorage.getItem(KEY))||{sessions:[]}}catch{return{sessions:[]}}}
@@ -181,11 +182,11 @@ async function checkHealth(){
  const versionOk=await checkAppVersion();
  try{
    const r=await fetch("/api/health",{cache:"no-store"}),d=await readJsonResponse(r,"Setup check");
-   const ok=versionOk&&d.tavilyConfigured&&d.anyPrimaryAiConfigured;
-   badge.textContent=ok?"Verified engine ready":"Setup needed";
+   const ok=versionOk&&d.tavilyConfigured;
+   badge.textContent=ok?(d.anyPrimaryAiConfigured?"Verified engine ready":"Data engine ready — AI optional"):"Setup needed";
    badge.style.color=ok?"var(--good)":"var(--warn)";
    box.className="status "+(ok?"good":"warn");
-   box.innerHTML=`Core research: Tavily <strong>${d.tavilyConfigured?"✓":"missing"}</strong> • Primary AI Router <strong>${d.anyPrimaryAiConfigured?"✓":"no AI provider connected"}</strong><br><span class="tiny muted">Primary AI order: Gemini ${d.geminiConfigured?"✓":"—"} → OpenRouter ${d.openRouterConfigured?"✓":"—"} → Groq ${d.groqConfigured?"✓":"—"} → Cloudflare ${d.cloudflareConfigured?"✓":"—"}<br>Structured data: API-Football <strong>${d.apiFootballConfigured?"✓":"fallback mode"}</strong> • football-data.org <strong>${d.footballDataOrgConfigured?"✓":"not connected"}</strong> • TheSportsDB <strong>✓ free fallback</strong> • ScoreBat <strong>${d.scoreBatConfigured?"✓":"not connected"}</strong></span>`;
+   box.innerHTML=`Core research: Tavily <strong>${d.tavilyConfigured?"✓":"missing"}</strong> • Primary AI Router <strong>${d.anyPrimaryAiConfigured?"✓":"no AI provider connected"}</strong><br><span class="tiny muted">Primary text-AI order: OpenRouter ${d.openRouterConfigured?"✓":"—"} → Groq ${d.groqConfigured?"✓":"—"} → Cloudflare ${d.cloudflareConfigured?"✓":"—"} → Gemini ${d.geminiConfigured?"✓":"—"} (Gemini quota preserved for video)<br>Structured data: API-Football <strong>${d.apiFootballConfigured?"✓":"fallback mode"}</strong> • football-data.org <strong>${d.footballDataOrgConfigured?"✓":"not connected"}</strong> • TheSportsDB <strong>✓ free fallback</strong> • ScoreBat <strong>${d.scoreBatConfigured?"✓":"not connected"}</strong></span>`;
    return ok;
  }catch(e){badge.textContent="Server unavailable";box.className="status bad";box.textContent=e.message;return false}
 }
@@ -317,7 +318,7 @@ document.getElementById("startBtn").onclick=async()=>{
  if(!(await checkAppVersion()))return;
  const fixtures=parseLines("fixturesInput"),markets=parseLines("marketsInput");
  if(!fixtures.length){alert("Paste at least one fixture.");return}
- if(!(await checkHealth())){alert("Setup is incomplete. Open Setup and add API_FOOTBALL_KEY, TAVILY_API_KEY and GEMINI_API_KEY in Render.");return}
+ if(!(await checkHealth())){alert("Setup is incomplete. Tavily is required. For full AI synthesis connect at least one AI provider; API-Football is strongly recommended but the app can cross-check fixtures through fallback sources.");return}
  const session={id:crypto.randomUUID(),createdAt:new Date().toISOString(),fixtures:fixtures.map((name,i)=>({name,originalMarket:markets[i]||"",rounds:[],status:"waiting"}))};
  state.sessions.unshift(session);state.sessions=state.sessions.slice(0,30);saveState();activeSession=session;renderSession(session);await runSession(session)
 };
@@ -424,9 +425,10 @@ function authHtml(round){
  <div class="auth-grid">
    <div class="auth-item"><strong>Home resolved</strong><br>${esc(rh?.name||"Unresolved")}<br><span class="muted">confidence ${Math.round((rh?.confidence||0)*100)}%</span>${(rh?.searchVariantsTried||[]).length?`<br><span class="tiny muted">Tried: ${esc(rh.searchVariantsTried.join(" → "))}</span>`:""}</div>
    <div class="auth-item"><strong>Away resolved</strong><br>${esc(ra?.name||"Unresolved")}<br><span class="muted">confidence ${Math.round((ra?.confidence||0)*100)}%</span>${(ra?.searchVariantsTried||[]).length?`<br><span class="tiny muted">Tried: ${esc(ra.searchVariantsTried.join(" → "))}</span>`:""}</div>
-   <div class="auth-item"><strong>Fixture</strong><br>${f.date?esc(fmtDate(f.date)):"Not matched"}<br><span class="muted">${esc(f.league||"")} ${esc(f.round||"")}</span></div>
+   <div class="auth-item"><strong>Fixture</strong><br>${f.date?esc(fmtDate(f.date)):"Not matched"}<br><span class="muted">${esc(f.league||"")} ${esc(f.round||"")}</span>${f.verification?`<br><span class="tiny ${f.verification==="API_FOOTBALL"?"muted":""}">Verification: ${esc(f.verification)}${f.verificationConfidence!=null?` • ${esc(Math.round(f.verificationConfidence*100))}%`:""}${f.dateOnly?" • date verified, clock time not structured":""}</span>`:""}</div>
    <div class="auth-item"><strong>Live identity data</strong><br>${esc(lineupText)}<br><span class="muted">checked ${esc(fmtDate(g.checkedAt||""))}</span></div>
  </div>
+ ${(f.verificationSources||[]).length?`<details><summary>Fixture verification sources (${f.verificationSources.length})</summary>${f.verificationSources.map(x=>`<div class="tiny">• <strong>${esc(x.provider||"source")}</strong>${x.url?` — <a class="source" style="display:inline" href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title||x.url)}</a>`:""}</div>`).join("")}</details>`:""}
  ${g.squads?`<p class="tiny"><strong>Current squads loaded:</strong> ${esc(g.squads.home?.team)} (${g.squads.home?.count||0}) • ${esc(g.squads.away?.team)} (${g.squads.away?.count||0})</p>`:""}
  ${(g.injuries||[]).length?`<p class="tiny"><strong>Structured injuries/suspensions:</strong> ${esc(g.injuries.map(x=>`${x.team}: ${x.player}${x.reason?` — ${x.reason}`:""}`).join(" • "))}</p>`:""}
  ${(g.warnings||[]).length?`<p class="tiny" style="color:var(--warn)"><strong>Warnings:</strong> ${esc(g.warnings.join(" • "))}</p>`:""}
@@ -473,6 +475,19 @@ function marketChartHtml(a){
       <div class="bar-track"><div class="bar-fill" style="width:${clamp100(x.sportingSupportScore??x.dataSupportScore??x.fairProbabilityPct)}%"></div></div>
       <div class="right"><strong>${Math.round(clamp100(x.sportingSupportScore??x.dataSupportScore??x.fairProbabilityPct))}</strong></div>
    </div>`).join("")}
+ </div>`;
+}
+function dataEngineHtml(round){
+ const e=round.dataEngine||{},sig=e.strongestSignal;
+ if(!e.engine)return "";
+ return `<div class="chartbox">
+   <div class="fixture-head"><div><div class="chart-title">🧮 Local Statistical / Deterministic Engine</div><span class="tiny muted">Always available • no cloud AI quota required</span></div><span class="pill ${e.overallDataScore>=70?"VERIFIED":e.overallDataScore>=50?"CAUTION":"FAILED"}">${esc(e.overallDataScore??0)}/100 DATA</span></div>
+   <div class="score-grid">
+    ${[["Identity",e.identityScore],["Fixture verification",e.fixtureVerificationScore],["Squad coverage",e.squadCoverageScore],["Source diversity",e.sourceDiversityScore],["Video support",e.videoSupportScore]].map(([k,v])=>`<div class="score-card"><span class="tiny muted">${esc(k)}</span><div class="score-big">${esc(v??0)}/100</div></div>`).join("")}
+   </div>
+   ${sig?`<p><strong>Strongest explicit multi-source signal:</strong> ${esc(sig.market)} • support ${esc(sig.supportScore)}/100 • ${esc(sig.supportingDomains)} independent domain(s)</p>`:`<p class="tiny muted">No exact market wording repeated strongly enough across independent sources.</p>`}
+   <p class="tiny muted">${esc(e.note||"")}</p>
+   ${(e.explicitMarketSignals||[]).length?`<details><summary>Deterministic exact-market signals</summary>${e.explicitMarketSignals.slice(0,10).map(x=>`<div class="benchmark-card"><strong>${esc(x.market)}</strong> — ${esc(x.supportScore)}/100 • ${esc(x.supportingDomains)} domains • ${esc(x.mentions)} mentions</div>`).join("")}</details>`:""}
  </div>`;
 }
 function evidenceQualityHtml(a){
@@ -557,8 +572,8 @@ function valueAuditHtml(round){
 function temporalGuardHtml(round){
  const t=round.temporalGuard||{};
  if(!t.mode)return "";
- const good=t.mode==="PREMATCH";
- const cls=good?"VERIFIED":"FAILED";
+ const good=t.mode==="PREMATCH",webGood=t.mode==="PREMATCH_WEB_VERIFIED";
+ const cls=good?"VERIFIED":webGood?"CAUTION":"FAILED";
  return `<div class="auth">
    <div class="fixture-head"><strong>⏱️ Pre-Match Integrity Guard</strong><span class="pill ${cls}">${esc(t.mode)}</span></div>
    <p class="tiny"><strong>Betting analysis allowed:</strong> ${t.bettingAllowed?"YES":"NO"}</p>
@@ -581,7 +596,9 @@ function councilHtml(round){
  return `<div class="chartbox">
  <div class="fixture-head"><div><div class="chart-title">🧠 Independent AI Council</div><span class="tiny muted">Same evidence pack • bookmaker odds hidden</span></div><span class="pill ${cls}">${esc(conv)} CONVERGENCE</span></div>
  <p><strong>${conv==="INSUFFICIENT"?"Council status":"Council consensus"}:</strong> <span style="color:var(--gold)">${esc(agg.consensusMarket||"NO CONSENSUS")}</span>${agg.medianFairProbabilityPct!=null?` • median fair ${esc(Math.round(agg.medianFairProbabilityPct*10)/10)}%`:""}</p>${agg.leadingSingleModelMarket?`<p class="tiny"><strong>Single-model opinion only:</strong> ${esc(agg.leadingSingleModelMarket)}</p>`:""}
- <p class="tiny muted">${esc(agg.note||"")} • Agent seats ${esc(counts.agentSeats??members.length)} • Available ${esc(counts.availableAgents??members.filter(x=>x.available).length)} • Unique models ${esc(counts.uniqueModels??"—")} • Specialist agents ${esc(counts.specialistAgents??0)}</p>${c.warning?`<p class="tiny" style="color:var(--warn)">${esc(c.warning)}</p>`:""}
+ <p class="tiny muted">${esc(agg.note||"")} • Agent seats ${esc(counts.agentSeats??members.length)} / requested ${esc(c.requestedAgentSeats??members.length)} • Available ${esc(counts.availableAgents??members.filter(x=>x.available).length)} • Unique underlying models/engines ${esc(agg.uniqueUnderlyingModels??counts.uniqueModels??"—")} • Specialist agents ${esc(counts.specialistAgents??0)} • Deterministic engines ${esc(counts.deterministicEngines??0)}</p>
+ ${agg.uniqueModelConsensus?`<div class="status"><strong>Unique-model consensus:</strong> ${esc(agg.uniqueModelConsensus.market||"NO CONSENSUS")} • ${esc(agg.uniqueModelConsensus.convergence||"NONE")} • ${esc(agg.uniqueModelConsensus.count||0)}/${esc(agg.uniqueModelConsensus.uniqueModels||0)} underlying models/engines<br><span class="tiny"><strong>Agent-seat consensus:</strong> ${esc(agg.agentConsensus?.market||"NO CONSENSUS")} • ${esc(agg.agentConsensus?.convergence||"NONE")} • ${esc(agg.agentConsensus?.count||0)}/${esc(agg.agentConsensus?.availableAgents||0)} available agents</span></div>`:""}
+ ${c.stoppedEarly?`<p class="tiny" style="color:var(--good)"><strong>Adaptive council stopped early:</strong> ${esc(c.stopReason||"")}</p>`:""}${c.warning?`<p class="tiny" style="color:var(--warn)">${esc(c.warning)}</p>`:""}
  <div class="council-grid">${members.map(m=>`<div class="council-card"><div class="council-model">${esc(m.modelName||m.provider||"AI")}</div>${m.available?`<div class="council-market">${esc(m.primaryMarket||"UNRESOLVED")}</div><div class="tiny">Fair: <strong>${m.fairProbabilityPct==null?"—":esc(m.fairProbabilityPct)+"%"}</strong> • ${esc(m.confidence||"")}</div><div class="tiny muted">Support: ${esc((m.strongestReasons||[]).slice(0,3).join(" • "))}</div><div class="tiny muted">Counter: ${esc((m.counterEvidence||[]).slice(0,3).join(" • "))}</div>`:`<div class="tiny" style="color:var(--danger)">Unavailable: ${esc(m.error||"provider failed")}</div>`}</div>`).join("")}</div>
  ${round.finalConvergence?`<div class="status ${String(round.finalConvergence.status).includes("CONVERGED")?"good":String(round.finalConvergence.status).includes("DISAGREE")?"warn":""}"><strong>${esc(round.finalConvergence.status)}</strong><br>${esc(round.finalConvergence.note||"")}<br><span class="tiny">Primary: ${esc(round.finalConvergence.primaryMarket||"")} • Council: ${esc(round.finalConvergence.councilMarket||"")}</span></div>`:""}
  </div>`;
@@ -637,6 +654,7 @@ function analysisHtml(round){
  ${temporalGuardHtml(round)}
  ${authHtml(round)}
  ${videoReviewHtml(round)}
+ ${dataEngineHtml(round)}
  ${evidenceQualityHtml(a)}
  ${blocked?`<div class="status warn"><strong>Betting-market presentation withheld.</strong> Evidence was gathered and analyzed, but candidate betting markets stay hidden until the exact fixture time/status is verified.</div>`:marketChartHtml(a)}
  ${coverageDonutHtml(a)}
@@ -667,7 +685,7 @@ function renderSession(session){
  ${session.fixtures.map((f,i)=>{const latest=f.rounds.at(-1),a=latest?.analysis||{};return `<div class="fixture"><div class="fixture-head"><div><div class="fixture-title">${i+1}. ${esc(f.name)}</div>${f.originalMarket?`<div class="tiny muted">Original: ${esc(f.originalMarket)}</div>`:""}</div><div>${f.status==="researching"?`<span class="pill CAUTION">Round ${esc(f.pendingRound||f.rounds.length+1)} running…</span>`:f.status==="error"?'<span class="pill UNRESOLVED">Error</span>':latest?`<span class="pill ${esc(classKey(a.classification))}">Round ${f.rounds.length}</span>`:'<span class="pill">Waiting</span>'}</div></div>
  ${progressHtml(f,latest)}
  ${f.error?`<div class="status bad">${esc(f.error)}</div>`:""}${latest?analysisHtml(latest):""}
- <div class="actions">${latest?`<button class="secondary" ${f.status==="researching"?"disabled":""} onclick="relearn('${session.id}',${i})">${f.status==="researching"?`Round ${esc(f.pendingRound||f.rounds.length+1)} running…`:`Relearn — Fresh Round ${f.rounds.length+1}`}</button><button class="secondary" ${f.status==="researching"?"disabled":""} onclick="expandCouncil('${session.id}',${i},5)">+5 AI Brains</button><button class="secondary" ${f.status==="researching"?"disabled":""} onclick="expandCouncil('${session.id}',${i},10)">+10 AI Brains</button>`:""}${f.rounds.length>1?`<button class="secondary" onclick="showRounds('${session.id}',${i})">Compare ${f.rounds.length} Rounds</button>`:""}</div></div>`}).join("")}</div>`
+ <div class="actions">${latest?`<button class="secondary" ${f.status==="researching"?"disabled":""} onclick="relearn('${session.id}',${i})">${f.status==="researching"?`Round ${esc(f.pendingRound||f.rounds.length+1)} running…`:`Relearn — Fresh Round ${f.rounds.length+1}`}</button><button class="secondary" ${f.status==="researching"?"disabled":""} onclick="expandCouncil('${session.id}',${i},10)">+10 Brains</button><button class="secondary" ${f.status==="researching"?"disabled":""} onclick="expandCouncil('${session.id}',${i},25)">+25 Brains</button><button class="secondary" ${f.status==="researching"?"disabled":""} onclick="expandCouncil('${session.id}',${i},100)">Deepen toward 100</button>`:""}${f.rounds.length>1?`<button class="secondary" onclick="showRounds('${session.id}',${i})">Compare ${f.rounds.length} Rounds</button>`:""}</div></div>`}).join("")}</div>`
 }
 function showRounds(sessionId,index){const s=state.sessions.find(x=>x.id===sessionId),f=s?.fixtures[index];if(!f)return;alert(`${f.name}\n\n${f.rounds.map((r,i)=>`Round ${i+1}: ${r.analysis?.finalMarket||"?"} — ${r.analysis?.classification||"?"} — Gate ${r.authenticityGate?.status||"?"}`).join("\n")}`)}
 function download(name,obj){const blob=new Blob([JSON.stringify(obj,null,2)],{type:"application/json"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;a.click();URL.revokeObjectURL(a.href)}
@@ -701,9 +719,9 @@ document.getElementById("refreshPostboard").onclick=renderPostboard;
 async function expandCouncil(sessionId,index,addCount){
  const s=state.sessions.find(x=>x.id===sessionId),f=s?.fixtures?.[index],round=f?.rounds?.at(-1);
  if(!round)return;
- const current=round.aiCouncil?.members?.length||0,target=Math.min(50,current+addCount);
- if(target<=current){alert("This match already has 50 council agent seats.");return}
- if(target>=20&&!confirm(`Expand this match from ${current} to ${target} AI agent seats?\n\nLarge councils use many free API requests and may hit provider limits. Continue?`))return;
+ const current=round.aiCouncil?.members?.length||0,target=addCount>=100?100:Math.min(100,current+addCount);
+ if(target<=current){alert("This match has already reached the 100-agent ceiling or the requested depth.");return}
+ if(target>=20&&!confirm(`Deepen this match from ${current} toward ${target} agent seats?\n\nThe council is adaptive: it expands in waves and may stop early if independent underlying models converge. Provider circuit breakers skip quota-exhausted services. Continue?`))return;
  f.status="researching";saveState();renderSession(s);
  try{
    const r=await fetch("/api/council-expand",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
@@ -720,8 +738,8 @@ async function refreshProviderBoard(){
  box.innerHTML='<div class="chart-title">🔌 Provider & Quota Board</div><p class="tiny">Loading…</p>';
  try{
    const r=await fetch("/api/provider-status",{cache:"no-store"}),d=await readJsonResponse(r,"Provider status"),cfg=d.configured||{},u=d.usage||{};
-   const rows=[["API-Football",cfg.apiFootball,u.apiFootball],["Tavily",cfg.tavily,u.tavily],["football-data.org",cfg.footballDataOrg,u.footballDataOrg],["TheSportsDB",cfg.theSportsDB,u.theSportsDB],["ScoreBat",cfg.scoreBat,u.scoreBat],["Gemini",cfg.gemini,u.gemini],["Groq",cfg.groq,u.groq],["Cloudflare",cfg.cloudflare,u.cloudflare],["OpenRouter",cfg.openrouter,u.openrouter]];
-   box.innerHTML=`<div class="chart-title">🔌 Provider & Quota Board</div><div class="coverage">${rows.map(([name,on,x])=>`<div class="cov ${on?"complete":"partial"}"><strong>${esc(name)}</strong><br><span class="tiny">${on?"configured":"not configured"} • calls ${esc(x?.calls??0)} • success ${esc(x?.success??0)} • fail ${esc(x?.fail??0)}</span>${x?.lastQuota?.dailyRemaining!=null?`<br><span class="tiny muted">Daily remaining ${esc(x.lastQuota.dailyRemaining)} / ${esc(x.lastQuota.dailyLimit||"—")}</span>`:""}${x?.lastError?`<br><span class="tiny" style="color:var(--warn)">${esc(x.lastError)}</span>`:""}</div>`).join("")}</div><p class="tiny muted">OpenRouter zero-price models visible: ${esc(d.openRouterFreeModelsCount??0)}. These counters reset when the free Render instance restarts.</p>`;
+   const health=d.health||{};const rows=[["API-Football",cfg.apiFootball,u.apiFootball,null],["Tavily",cfg.tavily,u.tavily,null],["football-data.org",cfg.footballDataOrg,u.footballDataOrg,null],["TheSportsDB",cfg.theSportsDB,u.theSportsDB,null],["ScoreBat",cfg.scoreBat,u.scoreBat,null],["Gemini Text",cfg.gemini,u.gemini,health.geminiText],["Gemini Video",cfg.gemini,u.gemini,health.geminiVideo],["Groq",cfg.groq,u.groq,health.groq],["Cloudflare",cfg.cloudflare,u.cloudflare,health.cloudflare],["OpenRouter",cfg.openrouter,u.openrouter,health.openrouter]];
+   box.innerHTML=`<div class="chart-title">🔌 Provider & Quota Board</div><div class="coverage">${rows.map(([name,on,x,ph])=>`<div class="cov ${on&&(!ph||ph.state==="READY")?"complete":"partial"}"><strong>${esc(name)}</strong><br><span class="tiny">${on?"configured":"not configured"} • ${ph?`health ${esc(ph.state)}${ph.blockedForSeconds?` (${Math.ceil(ph.blockedForSeconds/60)}m cooldown)`:""} • `:""}calls ${esc(x?.calls??0)} • success ${esc(x?.success??0)} • fail ${esc(x?.fail??0)}</span>${x?.lastQuota?.dailyRemaining!=null?`<br><span class="tiny muted">Daily remaining ${esc(x.lastQuota.dailyRemaining)} / ${esc(x.lastQuota.dailyLimit||"—")}</span>`:""}${ph?.lastReason?`<br><span class="tiny" style="color:var(--warn)">${esc(ph.lastReason)}</span>`:x?.lastError?`<br><span class="tiny" style="color:var(--warn)">${esc(x.lastError)}</span>`:""}</div>`).join("")}</div><p class="tiny muted">OpenRouter zero-price models visible: ${esc(d.openRouterFreeModelsCount??0)}. These counters reset when the free Render instance restarts.</p>`;
  }catch(e){box.innerHTML=`<div class="chart-title">🔌 Provider & Quota Board</div><div class="status bad">${esc(e.message)}</div>`}
 }
 document.getElementById("refreshProviders").onclick=refreshProviderBoard;
