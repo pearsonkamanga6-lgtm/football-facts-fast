@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#071923">
-<title>Football Fact-First Research v6.1</title>
+<title>Football Fact-First Research v6.2</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon-192.png">
 <style>
@@ -49,7 +49,7 @@
 </head>
 <body>
 <div class="app">
-<div class="top"><div class="brand"><h1>⚽ Football Fact-First Research <span class="pill VERIFIED">v6.1</span></h1><small>Football Intelligence Research Engine • relevance firewall • clean evidence warehouse • 100-brain council</small></div><div class="badge" id="healthBadge">Checking engine…</div></div>
+<div class="top"><div class="brand"><h1>⚽ Football Fact-First Research <span class="pill VERIFIED">v6.2</span></h1><small>Football Intelligence Research Engine • Render-safe research • resilient retries • 100-brain council</small></div><div class="badge" id="healthBadge">Checking engine…</div></div>
 <div class="tabs"><button class="tab active" data-tab="session">Research Session</button><button class="tab" data-tab="postboard">POSTBOARD</button><button class="tab" data-tab="history">History</button><button class="tab" data-tab="settings">Setup</button></div>
 
 <section id="tab-session">
@@ -125,7 +125,7 @@ Leave blank for pure market discovery."></textarea></div>
 
 <section id="tab-settings" class="hidden">
 <div class="panel">
-<h2>Research engine setup <span class="pill VERIFIED">v6.1</span></h2><p class="tiny muted">v6.1 keeps the multi-search fleet but adds a strict relevance firewall, cleaner source scoring, rejected-source auditing, semantic council convergence and stronger external-prediction extraction. If you still see an older version after deploy, close the tab and reopen the Render URL.</p>
+<h2>Research engine setup <span class="pill VERIFIED">v6.2</span></h2><p class="tiny muted">v6.1 keeps the multi-search fleet but adds a strict relevance firewall, cleaner source scoring, rejected-source auditing, semantic council convergence and stronger external-prediction extraction. If you still see an older version after deploy, close the tab and reopen the Render URL.</p>
 <p>Add these Environment Variables in Render. Keep all keys on the server, never in the browser:</p>
 <ul>
 <li><code>API_FOOTBALL_KEY</code> — structured football facts, predictions and bookmaker odds.</li>
@@ -154,7 +154,7 @@ Leave blank for pure market discovery."></textarea></div>
 </div>
 
 <script>
-const APP_VERSION="6.1.0";
+const APP_VERSION="6.2.0";
 const KEY="footballFactFirstResearch_v2";
 let state=loadState();let activeSession=null;
 function loadState(){try{return JSON.parse(localStorage.getItem(KEY))||{sessions:[]}}catch{return{sessions:[]}}}
@@ -266,6 +266,24 @@ async function readJsonResponse(response,label="Request"){
   }
 }
 
+async function fetchResearchJson(url,label,{attempts=8,baseDelay=1400}={}){
+  let lastError=null;
+  for(let attempt=1;attempt<=attempts;attempt++){
+    try{
+      const r=await fetch(url,{cache:"no-store"});
+      if([502,503,504].includes(r.status)){
+        const text=await r.text().catch(()=>"");
+        lastError=new Error(`${label} temporarily unavailable (HTTP ${r.status}).`);
+      }else{
+        const data=await readJsonResponse(r,label);
+        return {response:r,data,attempt};
+      }
+    }catch(err){lastError=err;}
+    if(attempt<attempts)await new Promise(r=>setTimeout(r,Math.min(9000,baseDelay*attempt)));
+  }
+  throw lastError||new Error(`${label} remained unavailable after ${attempts} retries.`);
+}
+
 const researchPollers=new Map();
 
 function createProgressId(round){
@@ -285,9 +303,8 @@ function stopProgressPolling(id){
 }
 async function pollResearchProgress(fixtureObj,progressId){
   try{
-    const r=await fetch(`/api/research-progress/${encodeURIComponent(progressId)}`,{cache:"no-store"});
+    const {response:r,data:p}=await fetchResearchJson(`/api/research-progress/${encodeURIComponent(progressId)}`,"Progress tracker",{attempts:2,baseDelay:700});
     if(!r.ok)return;
-    const p=await readJsonResponse(r,"Progress tracker");
     fixtureObj.progress=p;
     if(activeSession){
       saveState();
@@ -379,8 +396,19 @@ async function researchFixture(fixtureObj,round){
    const deadline=Date.now()+18*60*1000;
    while(Date.now()<deadline){
      await new Promise(r=>setTimeout(r,1250));
-     const rr=await fetch(`/api/research-result/${encodeURIComponent(progressId)}`,{cache:"no-store"});
-     const data=await readJsonResponse(rr,"Research result");
+     let rr,data;
+     try{
+       const got=await fetchResearchJson(`/api/research-result/${encodeURIComponent(progressId)}`,"Research result",{attempts:6,baseDelay:1500});
+       rr=got.response;data=got.data;
+       if(got.attempt>1){
+         fixtureObj.progress={...(fixtureObj.progress||{}),stage:"Server recovered",message:`Render was temporarily unavailable; connection recovered after ${got.attempt} attempts. Continuing the same research round.`,updatedAt:new Date().toISOString()};
+         saveState();if(activeSession)renderSession(activeSession);
+       }
+     }catch(err){
+       fixtureObj.progress={...(fixtureObj.progress||{}),stage:"Waiting for Render",message:"The server/proxy is temporarily unavailable. Automatic retries were attempted before stopping this round.",updatedAt:new Date().toISOString()};
+       saveState();if(activeSession)renderSession(activeSession);
+       throw err;
+     }
      if(rr.status===202){
        if(data.progress){
          fixtureObj.progress=data.progress;
@@ -391,7 +419,7 @@ async function researchFixture(fixtureObj,round){
      }
      if(!rr.ok||data.status==="error")throw new Error(data.error||"Research failed.");
      if(data.status==="complete"&&data.result){
-       fixtureObj.progress={...(fixtureObj.progress||{}),percent:100,stage:"Complete",stageNumber:10,totalStages:10,status:"complete",message:`Round ${round} completed successfully.`,updatedAt:new Date().toISOString()};
+       fixtureObj.progress={...(fixtureObj.progress||{}),percent:100,stage:"Complete",stageNumber:12,totalStages:12,status:"complete",message:`Round ${round} completed successfully.`,updatedAt:new Date().toISOString()};
        return data.result;
      }
    }
@@ -711,8 +739,17 @@ function renderSession(session){
  ${session.fixtures.map((f,i)=>{const latest=f.rounds.at(-1),a=latest?.analysis||{};return `<div class="fixture"><div class="fixture-head"><div><div class="fixture-title">${i+1}. ${esc(f.name)}</div>${f.originalMarket?`<div class="tiny muted">Original: ${esc(f.originalMarket)}</div>`:""}</div><div>${f.status==="researching"?`<span class="pill CAUTION">Round ${esc(f.pendingRound||f.rounds.length+1)} running…</span>`:f.status==="error"?'<span class="pill UNRESOLVED">Error</span>':latest?`<span class="pill ${esc(classKey(a.classification))}">Round ${f.rounds.length}</span>`:'<span class="pill">Waiting</span>'}</div></div>
  ${progressHtml(f,latest)}
  ${f.error?`<div class="status bad">${esc(f.error)}</div>`:""}${latest?analysisHtml(latest):""}
- <div class="actions">${latest?`<button class="secondary" ${f.status==="researching"?"disabled":""} onclick="relearn('${session.id}',${i})">${f.status==="researching"?`Round ${esc(f.pendingRound||f.rounds.length+1)} running…`:`Relearn — Fresh Round ${f.rounds.length+1}`}</button><button class="secondary" ${f.status==="researching"?"disabled":""} onclick="expandCouncil('${session.id}',${i},10)">+10 Brains</button><button class="secondary" ${f.status==="researching"?"disabled":""} onclick="expandCouncil('${session.id}',${i},25)">+25 Brains</button><button class="secondary" ${f.status==="researching"?"disabled":""} onclick="expandCouncil('${session.id}',${i},100)">Deepen toward 100</button>`:""}${f.rounds.length>1?`<button class="secondary" onclick="showRounds('${session.id}',${i})">Compare ${f.rounds.length} Rounds</button>`:""}</div></div>`}).join("")}</div>`
+ <div class="actions">${f.status==="error"?`<button class="secondary" onclick="retryFailedFixture('${session.id}',${i})">Retry Failed Fixture</button>`:""}${latest?`<button class="secondary" ${f.status==="researching"?"disabled":""} onclick="relearn('${session.id}',${i})">${f.status==="researching"?`Round ${esc(f.pendingRound||f.rounds.length+1)} running…`:`Relearn — Fresh Round ${f.rounds.length+1}`}</button><button class="secondary" ${f.status==="researching"?"disabled":""} onclick="expandCouncil('${session.id}',${i},10)">+10 Brains</button><button class="secondary" ${f.status==="researching"?"disabled":""} onclick="expandCouncil('${session.id}',${i},25)">+25 Brains</button><button class="secondary" ${f.status==="researching"?"disabled":""} onclick="expandCouncil('${session.id}',${i},100)">Deepen toward 100</button>`:""}${f.rounds.length>1?`<button class="secondary" onclick="showRounds('${session.id}',${i})">Compare ${f.rounds.length} Rounds</button>`:""}</div></div>`}).join("")}</div>`
 }
+window.retryFailedFixture=async(sessionId,index)=>{
+ const s=state.sessions.find(x=>x.id===sessionId),f=s?.fixtures?.[index];if(!f)return;
+ const round=Math.max(1,(f.rounds?.length||0)+1);
+ f.status="researching";f.pendingRound=round;delete f.error;saveState();renderSession(s);
+ const status=document.getElementById("runStatus");status.classList.remove("hidden");status.className="status";status.textContent=`Retrying ${f.name}. The v6.2 client will tolerate temporary Render 502/503/504 responses automatically.`;
+ try{const d=await researchFixture(f,round);f.rounds.push(d);f.status="done";status.className="status good";status.textContent=`Retry completed for ${f.name}.`;}
+ catch(e){f.status="error";f.error=e.message;status.className="status bad";status.textContent=`Retry stopped: ${e.message}`;}
+ delete f.pendingRound;delete f.progressId;saveState();renderSession(s);
+};
 function showRounds(sessionId,index){const s=state.sessions.find(x=>x.id===sessionId),f=s?.fixtures[index];if(!f)return;alert(`${f.name}\n\n${f.rounds.map((r,i)=>`Round ${i+1}: ${r.analysis?.finalMarket||"?"} — ${r.analysis?.classification||"?"} — Gate ${r.authenticityGate?.status||"?"}`).join("\n")}`)}
 function download(name,obj){const blob=new Blob([JSON.stringify(obj,null,2)],{type:"application/json"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;a.click();URL.revokeObjectURL(a.href)}
 window.exportSession=id=>{const s=state.sessions.find(x=>x.id===id);if(s)download(`football-research-session-${id.slice(0,8)}.json`,s)}

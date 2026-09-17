@@ -1653,9 +1653,11 @@ function sourceReliability(kind){
 }
 function researchModeConfig(mode){
   const m=String(mode||"deep").toLowerCase();
-  if(m==="standard")return {name:"standard",maxTasks:14,providersPerTask:2,maxDiscovered:105,maxPerTask:6,maxOpened:35,minTasksBeforeSaturation:10,saturationWindow:4};
-  if(m==="maximum")return {name:"maximum",maxTasks:32,providersPerTask:4,maxDiscovered:360,maxPerTask:10,maxOpened:130,minTasksBeforeSaturation:20,saturationWindow:7};
-  return {name:"deep",maxTasks:24,providersPerTask:3,maxDiscovered:210,maxPerTask:8,maxOpened:75,minTasksBeforeSaturation:15,saturationWindow:5};
+  // Keep discovery broad, but cap expensive full-page DOM parsing so free Render
+  // instances do not exhaust memory. The source inventory can still be large.
+  if(m==="standard")return {name:"standard",maxTasks:14,providersPerTask:2,maxDiscovered:105,maxPerTask:6,maxOpened:24,minTasksBeforeSaturation:10,saturationWindow:4};
+  if(m==="maximum")return {name:"maximum",maxTasks:32,providersPerTask:4,maxDiscovered:360,maxPerTask:10,maxOpened:72,minTasksBeforeSaturation:20,saturationWindow:7};
+  return {name:"deep",maxTasks:24,providersPerTask:3,maxDiscovered:210,maxPerTask:8,maxOpened:48,minTasksBeforeSaturation:15,saturationWindow:5};
 }
 function makeResearchLedger(fixture,gate,round,mode="deep"){
   const home=gate?.requested?.home||gate?.resolved?.home?.name||"",away=gate?.requested?.away||gate?.resolved?.away?.name||"";
@@ -1702,10 +1704,40 @@ async function searchFleet(query,{providersPerTask=3,maxResultsPerProvider=7}={}
   providers.push(["google",()=>googleHtmlSearch(query,maxResultsPerProvider)],["bing",()=>bingHtmlSearch(query,maxResultsPerProvider)],["duckduckgo",()=>duckDuckGoHtmlSearch(query,maxResultsPerProvider)]);
   const offset=parseInt(stableHash(query).slice(0,4),16)%Math.max(1,providers.length);
   const ordered=[...providers.slice(offset),...providers.slice(0,offset)].slice(0,Math.max(1,Math.min(providersPerTask,providers.length)));
-  const groups=[];
-  for(const [name,fn] of ordered){try{groups.push({provider:name,results:(await fn()||[]).map(x=>({...x,provider:x.provider||name}))});}catch(err){groups.push({provider:name,results:[],error:String(err?.message||err)});}}
-  return groups;
+  const settled=await Promise.allSettled(ordered.map(async([name,fn])=>({name,rows:await fn()})));
+  return settled.map((s,i)=>{
+    const name=ordered[i]?.[0]||"search";
+    if(s.status==="fulfilled")return {provider:name,results:(s.value.rows||[]).map(x=>({...x,provider:x.provider||name}))};
+    return {provider:name,results:[],error:String(s.reason?.message||s.reason||"Search provider failed")};
+  });
 }
+async function readResponseTextLimited(response,maxBytes=420000){
+  if(!response.body||typeof response.body.getReader!=="function"){
+    const text=await response.text();
+    return text.length>maxBytes?text.slice(0,maxBytes):text;
+  }
+  const reader=response.body.getReader();
+  const decoder=new TextDecoder();
+  let total=0,out="";
+  try{
+    while(true){
+      const {done,value}=await reader.read();
+      if(done)break;
+      if(!value)continue;
+      const remaining=maxBytes-total;
+      if(remaining<=0){try{await reader.cancel();}catch{}break;}
+      const chunk=value.length>remaining?value.slice(0,remaining):value;
+      total+=chunk.length;
+      out+=decoder.decode(chunk,{stream:true});
+      if(total>=maxBytes){try{await reader.cancel();}catch{}break;}
+    }
+    out+=decoder.decode();
+    return out;
+  }finally{
+    try{reader.releaseLock();}catch{}
+  }
+}
+
 async function readPublicPage(url){
   const usage=providerUsage.pageReader||{};usage.calls=(usage.calls||0)+1;providerUsage.pageReader=usage;
   const u=safePublicUrl(url);if(!u)return {ok:false,url,error:"Unsafe or unsupported URL."};
@@ -1714,11 +1746,11 @@ async function readPublicPage(url){
     const ctype=String(r.headers.get("content-type")||"").toLowerCase();
     if(!r.ok)throw new Error(`HTTP ${r.status}`);
     if(!/text\/html|application\/xhtml|text\/plain/.test(ctype))return {ok:false,url:u.href,error:`Unsupported content type ${ctype||"unknown"}`};
-    let txt=await r.text();if(txt.length>1500000)txt=txt.slice(0,1500000);
+    let txt=await readResponseTextLimited(r,420000);
     let title="",body="";
     if(/html/.test(ctype)||/<html/i.test(txt)){const $=cheerio.load(txt);$("script,style,noscript,svg,canvas,iframe,form,nav,footer").remove();title=($("title").first().text()||$("h1").first().text()||u.hostname).replace(/\s+/g," ").trim();body=$("article").text()||$("main").text()||$("body").text();}
     else{title=u.hostname;body=txt;}
-    body=String(body||"").replace(/\s+/g," ").trim();if(body.length>12000)body=body.slice(0,12000);
+    body=String(body||"").replace(/\s+/g," ").trim();if(body.length>8000)body=body.slice(0,8000);
     usage.success=(usage.success||0)+1;return {ok:body.length>120,url:u.href,title,content:body,contentLength:body.length};
   }catch(err){usage.fail=(usage.fail||0)+1;usage.lastError=String(err?.message||err).slice(0,240);return {ok:false,url:u.href,error:String(err?.message||err)};}
 }
@@ -1772,9 +1804,9 @@ async function buildResearchWarehouse({fixture,gate,round,mode="deep",progressId
   for(const x of entries.sort((a,b)=>b.reliability-a.reliability||b.categories.length-a.categories.length)){
     if(picked.length>=cfg.maxOpened)break;const d=sourceDomain(x.url)||"",n=domainCounts.get(d)||0;if(n>=4)continue;domainCounts.set(d,n+1);picked.push(x);
   }
-  for(let i=0;i<picked.length;i+=5){
-    const batch=picked.slice(i,i+5);
-    setResearchProgress(progressId,{percent:45+Math.round((Math.min(i+5,picked.length)/Math.max(1,picked.length))*12),stage:"Page reading",stageNumber:5,totalStages:12,message:`Opening and reading source pages ${Math.min(i+5,picked.length)}/${picked.length}.`});
+  for(let i=0;i<picked.length;i+=2){
+    const batch=picked.slice(i,i+2);
+    setResearchProgress(progressId,{percent:45+Math.round((Math.min(i+2,picked.length)/Math.max(1,picked.length))*12),stage:"Page reading",stageNumber:5,totalStages:12,message:`Opening and reading source pages ${Math.min(i+2,picked.length)}/${picked.length}.`});
     const rows=await Promise.all(batch.map(x=>readPublicPage(x.url)));
     rows.forEach((r,j)=>{
       const x=batch[j];x.opened=true;
@@ -3170,12 +3202,12 @@ Do not add markdown or commentary outside the JSON.`;
 
 app.get("/api/version",(req,res)=>{
   res.setHeader("Cache-Control","no-store");
-  res.json({ok:true,version:"6.1.0",protocol:"adaptive-100-brain-v1"});
+  res.json({ok:true,version:"6.2.0",protocol:"adaptive-100-brain-v1"});
 });
 
 app.get("/api/health",(req,res)=>{
   res.json({
-    ok:true,version:"6.1.0",
+    ok:true,version:"6.2.0",
     tavilyConfigured:Boolean(process.env.TAVILY_API_KEY),
     builtinSearchEnabled:true,
     searchFleetProviders:["Google HTML best-effort","Bing HTML","DuckDuckGo HTML",...(process.env.TAVILY_API_KEY?["Tavily"]:[])],
@@ -3252,6 +3284,39 @@ app.post("/api/council-expand",async(req,res)=>{
   }
 });
 
+
+function compactSourcesForClient(sources=[]){
+  return (sources||[]).map(x=>({
+    ...x,
+    content:String(x?.content||"").slice(0,1800)
+  }));
+}
+function compactWarehouseForClient(w){
+  if(!w)return null;
+  return {
+    mode:w.mode,summary:w.summary,createdAt:w.createdAt,
+    ledger:(w.ledger||[]).map(x=>({...x})),
+    entries:(w.entries||[]).map(x=>({
+      url:x.url,title:x.pageTitle||x.title||x.url,provider:x.provider,
+      categories:x.categories||[],kind:x.kind,reliability:x.reliability,
+      opened:Boolean(x.opened),usable:Boolean(x.usable),relevant:x.relevant!==false,
+      contentLength:x.contentLength||0,openError:x.openError||"",rejectionReason:x.rejectionReason||""
+    })),
+    rejected:(w.rejected||[]).slice(0,500).map(x=>({...x}))
+  };
+}
+function compactGateForClient(gate){
+  if(!gate)return gate;
+  const clone=JSON.parse(JSON.stringify(gate));
+  for(const side of ["home","away"]){
+    if(clone?.squads?.[side]?.players){
+      clone.squads[side].players=clone.squads[side].players.slice(0,36).map(p=>({name:p.name||"",position:p.position||""}));
+    }
+  }
+  if(Array.isArray(clone.injuries))clone.injuries=clone.injuries.slice(0,40);
+  if(Array.isArray(clone.transfers))clone.transfers=clone.transfers.slice(0,30);
+  return clone;
+}
 
 async function executeResearchJob(body,progressId){
   setResearchProgress(progressId,{percent:2,stage:"Starting research round",stageNumber:1,totalStages:12,message:"Request received. Preparing the fixture for a fresh independent research round."});
@@ -3372,10 +3437,10 @@ async function executeResearchJob(body,progressId){
   return {
     ok:true,fixture,round,researchMode,
     searchesUsed:(researchWarehouse.providerLog||[]).length+videoQueries.length,
-    queries:(researchWarehouse.ledger||[]).map(x=>x.query),videoQueries,sources,
-    authenticityGate:gate,videoReview,fallbackEvidence,
-    researchWarehouse,queryLedger:researchWarehouse.ledger||[],
-    sourceAudit:{webScout,videoScout,allScoutedLinks},
+    queries:(researchWarehouse.ledger||[]).map(x=>x.query),videoQueries,sources:compactSourcesForClient(sources),
+    authenticityGate:compactGateForClient(gate),videoReview,fallbackEvidence,
+    researchWarehouse:compactWarehouseForClient(researchWarehouse),queryLedger:researchWarehouse.ledger||[],
+    sourceAudit:{allScoutedLinks},
     dataEngine,
     temporalGuard,
     aiCouncil,externalBenchmarks,finalConvergence,
@@ -3396,7 +3461,7 @@ app.post("/api/research-start",(req,res)=>{
   }
 
   setResearchProgress(progressId,{
-    percent:1,stage:"Queued",stageNumber:1,totalStages:10,
+    percent:1,stage:"Queued",stageNumber:1,totalStages:12,
     message:"Research job accepted by the server. Starting now.",status:"running"
   });
   researchResults.delete(progressId);
@@ -3444,4 +3509,4 @@ app.use((req,res)=>{
   res.setHeader("Cache-Control","no-cache, no-store, must-revalidate");
   res.sendFile(path.join(__dirname,"public","index.html"));
 });
-app.listen(PORT,()=>console.log(`Football Fact-First Research v6.1 running on port ${PORT}`));
+app.listen(PORT,()=>console.log(`Football Fact-First Research v6.2 running on port ${PORT}`));

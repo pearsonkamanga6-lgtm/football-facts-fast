@@ -1,4 +1,4 @@
-# Football Fact-First Research v6.1 — Evidence Quality Guard
+# Football Fact-First Research v6.2 — Render-Safe Research Engine
 
 This release is a structural upgrade rather than another small patch. It is designed around the failures exposed during live testing: API quotas, provider outages, fixture-verification gaps, stale browser versions, and the risk of treating many specialist prompts as many independent models.
 
@@ -193,3 +193,25 @@ v6.0 changes the project from an API-led predictor into a research-first evidenc
 ## v6.1 — Evidence Quality Guard
 
 The first v6.0 live test proved the multi-search warehouse works, but it also exposed a serious quality issue: ambiguous team words polluted the source list (for example animal pages for “Lion” and unrelated “BG” pages). v6.1 adds a relevance firewall before and after page reading, decodes Bing redirects, balances source quotas across research questions, excludes rejected pages from synthesis, repairs identity scoring after independent fixture verification, separates single-source from multi-source market signals, improves semantic council consensus, and expands external prediction extraction across the full search fleet. Rejected URLs remain visible in the audit trail with a REJECTED label so the engine is transparent about what it discarded.
+
+
+## v6.2 — Render-Safe Research Engine
+
+This patch fixes the HTTP 502 / HTML error-page failure seen during Deep research on the free Render service.
+
+Root cause addressed: v6.1 could discover hundreds of sources and then parse too many large HTML documents with Cheerio. On a small free server, several large DOMs plus duplicated research payloads can cause high memory pressure or a temporary service restart.
+
+Changes:
+- Streams only the first ~420 KB of a page instead of loading arbitrarily large HTML into memory.
+- Extracted page text is capped at ~8 KB per source.
+- Page reading concurrency reduced to two pages at a time.
+- Deep mode still discovers up to 210 sources but fully opens at most 48 carefully ranked pages.
+- Maximum mode still discovers up to 360 sources but opens at most 72 pages.
+- Search providers for each research question run in parallel, reducing total wall-clock time.
+- The browser automatically retries transient HTTP 502/503/504 responses instead of immediately converting them into a failed fixture.
+- A failed fixture now has a visible Retry Failed Fixture button.
+- Server-to-browser result payload is compacted: full extracted page bodies and duplicate provider logs are not sent back to the browser/localStorage.
+- AI analysis still receives the full in-memory evidence during the live research job; compaction happens only for the returned client payload.
+- Progress stage counts are consistently 12.
+
+The research philosophy remains unchanged: broad discovery first, then ranked page reading, evidence cleaning, analysis, AI council, external benchmarks and odds last.
