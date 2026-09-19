@@ -2,12 +2,33 @@ const express = require("express");
 const path = require("path");
 const { jsonrepair } = require("jsonrepair");
 const cheerio = require("cheerio");
+const fs = require("fs");
+const pkg = require("./package.json");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
+const APP_VERSION = pkg.version;
+const AI_REQUEST_TIMEOUT_MS = Math.max(8000, Math.min(90000, Number(process.env.AI_REQUEST_TIMEOUT_MS || 45000)));
+const COUNCIL_MIN_MODELS = Math.max(2, Math.min(5, Number(process.env.COUNCIL_MIN_INDEPENDENT_MODELS || 2)));
+const COUNCIL_MAX_MODELS = Math.max(COUNCIL_MIN_MODELS, Math.min(12, Number(process.env.COUNCIL_MAX_MODELS || 8)));
+const INDEX_PATH = path.join(__dirname, "public", "index.html");
+const SERVICE_WORKER_PATH = path.join(__dirname, "public", "service-worker.js");
 const API_FOOTBALL_BASE = "https://v3.football.api-sports.io";
 
 app.use(express.json({ limit: "3mb" }));
+
+// Runtime-injected version: package.json is the single version source.
+app.get("/", (req,res) => {
+  res.setHeader("Cache-Control","no-cache, no-store, must-revalidate");
+  const html=fs.readFileSync(INDEX_PATH,"utf8").replaceAll("__APP_VERSION__",APP_VERSION);
+  res.type("html").send(html);
+});
+app.get("/service-worker.js", (req,res) => {
+  res.setHeader("Cache-Control","no-cache, no-store, must-revalidate");
+  const js=fs.readFileSync(SERVICE_WORKER_PATH,"utf8").replaceAll("__APP_VERSION__",APP_VERSION);
+  res.type("application/javascript").send(js);
+});
+
 app.use(express.static(path.join(__dirname, "public"), {
   etag:true,
   maxAge:"10m",
@@ -112,7 +133,7 @@ function finishResearchProgress(id){
 }
 // Keep in-memory progress lightweight on the free Render instance.
 setInterval(()=>{
-  const cutoff=Date.now()-45*60*1000;
+  const cutoff=Date.now()-90*60*1000;
   for(const [id,p] of researchProgress){
     const t=Date.parse(p.updatedAt||p.startedAt||0);
     if(Number.isFinite(t)&&t<cutoff){
@@ -1387,7 +1408,7 @@ Return ONLY JSON:
 
   for(const model of models){
     try{
-      const interaction=await ai.interactions.create({model,input});
+      const interaction=await withTimeout(ai.interactions.create({model,input}),AI_REQUEST_TIMEOUT_MS,`Gemini video ${model}`);
       const out=String(interaction.output_text||interaction.outputText||"").trim();
       const parsed=parseJsonObject(out,`Video model ${model}`);healProvider("geminiVideo");
       return {
@@ -1443,6 +1464,11 @@ async function fetchWithTimeout(url,options={},timeoutMs=12000){
   const timer=setTimeout(()=>controller.abort(),timeoutMs);
   try{return await fetch(url,{...options,signal:controller.signal});}
   finally{clearTimeout(timer);}
+}
+function withTimeout(promise,timeoutMs=AI_REQUEST_TIMEOUT_MS,label="Operation"){
+  let timer;
+  const timeout=new Promise((_,reject)=>{timer=setTimeout(()=>{const err=new Error(`${label} timed out after ${Math.round(timeoutMs/1000)}s.`);err.code="ETIMEDOUT";reject(err);},timeoutMs);});
+  return Promise.race([promise,timeout]).finally(()=>clearTimeout(timer));
 }
 
 function isPrivateHostname(host){
@@ -2090,11 +2116,11 @@ async function geminiCouncilMember(payload){
 }
 async function groqCouncilMember(payload,model,display,specialistRole=""){
   const key=requireEnv("GROQ_API_KEY");
-  const response=await fetch("https://api.groq.com/openai/v1/chat/completions",{
+  const response=await fetchWithTimeout("https://api.groq.com/openai/v1/chat/completions",{
     method:"POST",
     headers:{"Content-Type":"application/json","Authorization":`Bearer ${key}`},
     body:JSON.stringify({model,temperature:0.2,max_completion_tokens:3500,messages:[{role:"user",content:councilPrompt({...payload,specialistRole})}]})
-  });
+  },AI_REQUEST_TIMEOUT_MS);
   const txt=await response.text();
   if(!response.ok)throw new Error(`${display} council failed (${response.status}): ${txt.slice(0,260)}`);
   const d=parseHttpJson(txt,display);
@@ -2106,11 +2132,11 @@ async function cloudflareCouncilMember(payload){
   const account=process.env.CLOUDFLARE_ACCOUNT_ID,token=process.env.CLOUDFLARE_AUTH_TOKEN;
   if(!account||!token)throw new Error("Cloudflare AI is not configured.");
   const model=payload?._cfModel||process.env.CLOUDFLARE_LLAMA_MODEL||"@cf/meta/llama-3.3-70b-instruct-fp8-fast";
-  const response=await fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(account)}/ai/run/${model}`,{
+  const response=await fetchWithTimeout(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(account)}/ai/run/${model}`,{
     method:"POST",
     headers:{"Content-Type":"application/json","Authorization":`Bearer ${token}`},
     body:JSON.stringify({messages:[{role:"user",content:councilPrompt(payload)}],temperature:0.2,max_tokens:3500})
-  });
+  },AI_REQUEST_TIMEOUT_MS);
   const txt=await response.text();
   if(!response.ok)throw new Error(`Meta Llama council failed (${response.status}): ${txt.slice(0,260)}`);
   const d=parseHttpJson(txt,"Cloudflare Council");
@@ -2123,7 +2149,7 @@ async function cloudflareCouncilMember(payload){
 async function openRouterCouncilMember(payload){
   const key=requireEnv("OPENROUTER_API_KEY");
   const model=process.env.OPENROUTER_COUNCIL_MODEL||"openrouter/free";
-  const response=await fetch("https://openrouter.ai/api/v1/chat/completions",{
+  const response=await fetchWithTimeout("https://openrouter.ai/api/v1/chat/completions",{
     method:"POST",
     headers:{
       "Content-Type":"application/json","Authorization":`Bearer ${key}`,
@@ -2131,7 +2157,7 @@ async function openRouterCouncilMember(payload){
       "X-Title":"Football Fact-First Research"
     },
     body:JSON.stringify({model,temperature:0.2,max_tokens:3500,messages:[{role:"user",content:councilPrompt(payload)}]})
-  });
+  },AI_REQUEST_TIMEOUT_MS);
   const txt=await response.text();
   if(!response.ok)throw new Error(`OpenRouter council failed (${response.status}): ${txt.slice(0,260)}`);
   const d=JSON.parse(txt);
@@ -2175,27 +2201,28 @@ function uniqueModelRepresentatives(results){
   return reps;
 }
 function aggregateCouncil(results){
-  const available=results.filter(x=>x.available);
-  const agent=aggregateVoteRows(available);
+  // AI Council consensus is computed from AI models only. The local deterministic
+  // checker is reported separately and never masquerades as an independent AI vote.
+  const available=results.filter(x=>x.available && x.brainType!=="deterministic-engine");
   const modelReps=uniqueModelRepresentatives(available);
   const unique=aggregateVoteRows(modelReps);
-  const chosen=unique.available>=2?unique:agent;
-  const consensusAllowed=chosen.available>=2&&chosen.top?.count>=2;
+  const consensusAllowed=unique.available>=COUNCIL_MIN_MODELS&&unique.top?.count>=2;
   return {
     availableModels:available.length,
     uniqueUnderlyingModels:modelReps.length,
     unresolvedModels:available.filter(x=>x.canonicalMarketKey==="UNRESOLVED").length,
-    convergence:chosen.convergence,
-    consensusMarket:consensusAllowed?(chosen.top?.market||"NO CONSENSUS"):"NO COUNCIL CONSENSUS",
-    consensusCanonicalKey:consensusAllowed?(chosen.top?.canonicalMarketKey||""):"",
-    leadingSingleModelMarket:chosen.available===1?(chosen.top?.market||"UNRESOLVED"):"",
-    modelsAgreeing:consensusAllowed?(chosen.top?.models||[]):[],
-    medianFairProbabilityPct:consensusAllowed?(chosen.top?.medianFairProbabilityPct??null):null,
-    groups:chosen.ranked,
-    agentConsensus:{convergence:agent.convergence,availableAgents:agent.available,share:agent.share,market:agent.top?.market||"NO CONSENSUS",count:agent.top?.count||0},
+    convergence:unique.available<COUNCIL_MIN_MODELS?"INSUFFICIENT":unique.convergence,
+    consensusMarket:consensusAllowed?(unique.top?.market||"NO CONSENSUS"):"NO COUNCIL CONSENSUS",
+    consensusCanonicalKey:consensusAllowed?(unique.top?.canonicalMarketKey||""):"",
+    leadingSingleModelMarket:unique.available===1?(unique.top?.market||"UNRESOLVED"):"",
+    modelsAgreeing:consensusAllowed?(unique.top?.models||[]):[],
+    medianFairProbabilityPct:consensusAllowed?(unique.top?.medianFairProbabilityPct??null):null,
+    groups:unique.ranked,
+    agentConsensus:{convergence:unique.convergence,availableAgents:unique.available,share:unique.share,market:unique.top?.market||"NO CONSENSUS",count:unique.top?.count||0},
     uniqueModelConsensus:{convergence:unique.convergence,uniqueModels:unique.available,share:unique.share,market:unique.top?.market||"NO CONSENSUS",count:unique.top?.count||0},
-    note:chosen.available<2?`Only ${chosen.available} independent underlying model/engine vote is available. That is not council convergence.`:
-      chosen.top?`${chosen.top.count} of ${chosen.available} independent underlying model/engine votes selected the same canonical market. Agent-seat consensus is shown separately.`:"No resolved market convergence was found."
+    note:unique.available<COUNCIL_MIN_MODELS
+      ? `Only ${unique.available} independent AI model vote(s) completed. At least ${COUNCIL_MIN_MODELS} are required for Council consensus.`
+      : unique.top?`${unique.top.count} of ${unique.available} independent AI models selected the same canonical market.`:"No resolved market convergence was found."
   };
 }
 
@@ -2222,7 +2249,7 @@ const SPECIALIST_ROLES=[
 async function openRouterFreeModels(){
   if(!process.env.OPENROUTER_API_KEY)return [];
   try{
-    const r=await fetch("https://openrouter.ai/api/v1/models?max_price=0&output_modalities=text",{headers:{"Authorization":`Bearer ${process.env.OPENROUTER_API_KEY}`}});
+    const r=await fetchWithTimeout("https://openrouter.ai/api/v1/models?max_price=0&output_modalities=text",{headers:{"Authorization":`Bearer ${process.env.OPENROUTER_API_KEY}`}},20000);
     if(!r.ok)return [];
     const text=await r.text();
     const d=parseHttpJson(text,"OpenRouter Models");
@@ -2237,11 +2264,11 @@ async function openRouterSpecificCouncilMember(payload,modelId,display,specialis
   const key=requireEnv("OPENROUTER_API_KEY");
   usageStart("openrouter");
   try{
-    const r=await fetch("https://openrouter.ai/api/v1/chat/completions",{
+    const r=await fetchWithTimeout("https://openrouter.ai/api/v1/chat/completions",{
       method:"POST",
       headers:{"Content-Type":"application/json","Authorization":`Bearer ${key}`,"HTTP-Referer":process.env.APP_PUBLIC_URL||"https://localhost/","X-Title":"Football Fact-First Research"},
       body:JSON.stringify({model:modelId,temperature:0.2,max_tokens:1800,messages:[{role:"user",content:councilPrompt({...payload,specialistRole})}]})
-    });
+    },AI_REQUEST_TIMEOUT_MS);
     const text=await r.text();
     if(!r.ok)throw new Error(`${display} failed (${r.status}): ${text.slice(0,220)}`);
     const d=parseHttpJson(text,"OpenRouter Chat");
@@ -2292,75 +2319,59 @@ function councilSummaryCounts(members=[]){
   };
 }
 
-async function runAiCouncil(payload,{targetSize=8,existingMembers=[]}={}){
-  const target=Math.max(1,Math.min(100,Number(targetSize||8)));
+async function runAiCouncil(payload,{targetSize=4,existingMembers=[]}={}){
+  const target=Math.max(COUNCIL_MIN_MODELS,Math.min(COUNCIL_MAX_MODELS,Number(targetSize||4)));
   const jobs=[];
-  const used=new Set((existingMembers||[]).map(x=>`${x.provider}:${x.modelId||x.modelName}:${x.specialistRole||""}`));
+  const existingAi=(existingMembers||[]).filter(x=>x.brainType!=="deterministic-engine");
+  const used=new Set(existingAi.map(x=>`${x.provider}:${x.modelId||x.modelName}:${x.specialistRole||""}`));
   const add=(job)=>{const key=`${job.provider}:${job.modelId||job.name}:${job.role||""}`;if(!used.has(key)){used.add(key);jobs.push(job);}};
 
-  if(!(existingMembers||[]).some(x=>x.modelId==="local:deterministic-v1")){
-    add({provider:"Local",name:"Deterministic Statistical Engine",modelId:"local:deterministic-v1",brainType:"deterministic-engine",run:async()=>deterministicCouncilMember(payload)});
-  }
-
+  // Independent models first. This is the real Council.
   if(process.env.OPENROUTER_API_KEY&&providerCanCall("openrouter")){
     const freeModels=await openRouterFreeModels();
-    for(const fm of freeModels.slice(0,30))add({provider:"OpenRouter",name:fm.name,modelId:fm.id,brainType:"unique-model",healthName:"openrouter",run:()=>openRouterSpecificCouncilMember(payload,fm.id,fm.name)});
+    for(const fm of freeModels.slice(0,COUNCIL_MAX_MODELS))
+      add({provider:"OpenRouter",name:fm.name,modelId:fm.id,brainType:"unique-model",healthName:"openrouter",run:()=>openRouterSpecificCouncilMember(payload,fm.id,fm.name)});
   }
   if(process.env.GROQ_API_KEY&&providerCanCall("groq")){
-    add({provider:"Groq",name:"OpenAI GPT-OSS 120B",modelId:"openai/gpt-oss-120b",brainType:"unique-model",healthName:"groq",run:()=>groqCouncilMember(payload,"openai/gpt-oss-120b","OpenAI GPT-OSS 120B")});
-    add({provider:"Groq",name:"OpenAI GPT-OSS 20B",modelId:"openai/gpt-oss-20b",brainType:"unique-model",healthName:"groq",run:()=>groqCouncilMember(payload,"openai/gpt-oss-20b","OpenAI GPT-OSS 20B")});
-    add({provider:"Groq",name:"Qwen 3.8 27B",modelId:"qwen/qwen3.8-27b",brainType:"unique-model",healthName:"groq",run:()=>groqCouncilMember(payload,"qwen/qwen3.8-27b","Qwen 3.8 27B")});
+    for(const [modelId,name] of [["openai/gpt-oss-120b","OpenAI GPT-OSS 120B"],["openai/gpt-oss-20b","OpenAI GPT-OSS 20B"],["qwen/qwen3.8-27b","Qwen 3.8 27B"]])
+      add({provider:"Groq",name,modelId,brainType:"unique-model",healthName:"groq",run:()=>groqCouncilMember(payload,modelId,name)});
   }
   if(process.env.CLOUDFLARE_ACCOUNT_ID&&process.env.CLOUDFLARE_AUTH_TOKEN&&providerCanCall("cloudflare")){
-    for(const [modelId,name] of [
-      ["@cf/meta/llama-3.3-70b-instruct-fp8-fast","Meta Llama 3.3 70B"],
-      ["@cf/google/gemma-4-26b-a4b-it","Gemma 4 26B"],
-      ["@cf/nvidia/nemotron-3-120b-a12b","NVIDIA Nemotron 3 120B"],
-      ["@cf/zai-org/glm-4.7-flash","GLM 4.7 Flash"]
-    ])add({provider:"Cloudflare",name,modelId,brainType:"unique-model",healthName:"cloudflare",run:()=>cloudflareCouncilMember({...payload,_cfModel:modelId,_cfName:name})});
+    for(const [modelId,name] of [[process.env.CLOUDFLARE_LLAMA_MODEL||"@cf/meta/llama-3.3-70b-instruct-fp8-fast","Cloudflare AI"]])
+      add({provider:"Cloudflare",name,modelId,brainType:"unique-model",healthName:"cloudflare",run:()=>cloudflareCouncilMember({...payload,_cfModel:modelId,_cfName:name})});
   }
-  // Gemini is deliberately last for text so its free quota is preserved for video review.
   if(process.env.GEMINI_API_KEY&&providerCanCall("geminiText")){
-    add({provider:"Google",name:"Gemini",modelId:"gemini-core",brainType:"unique-model",healthName:"geminiText",run:()=>geminiCouncilMember(payload)});
+    const configuredModel=process.env.GEMINI_COUNCIL_MODEL||process.env.GEMINI_MODEL||"gemini-3.8-flash";
+    add({provider:"Google",name:`Gemini ${configuredModel}`,modelId:configuredModel,brainType:"unique-model",healthName:"geminiText",run:()=>geminiCouncilMember(payload)});
   }
 
-  const specialistProviders=[];
-  if(process.env.OPENROUTER_API_KEY&&providerCanCall("openrouter"))specialistProviders.push("openrouter");
-  if(process.env.GROQ_API_KEY&&providerCanCall("groq"))specialistProviders.push("groq");
-  if(process.env.CLOUDFLARE_ACCOUNT_ID&&process.env.CLOUDFLARE_AUTH_TOKEN&&providerCanCall("cloudflare"))specialistProviders.push("cloudflare");
-  if(process.env.GEMINI_API_KEY&&providerCanCall("geminiText"))specialistProviders.push("gemini");
-  const groqModels=[["openai/gpt-oss-120b","OpenAI GPT-OSS 120B"],["openai/gpt-oss-20b","OpenAI GPT-OSS 20B"],["qwen/qwen3.8-27b","Qwen 3.8 27B"]];
-  const cfModels=[["@cf/meta/llama-3.3-70b-instruct-fp8-fast","Meta Llama 3.3 70B"],["@cf/google/gemma-4-26b-a4b-it","Gemma 4 26B"],["@cf/nvidia/nemotron-3-120b-a12b","NVIDIA Nemotron 3 120B"],["@cf/zai-org/glm-4.7-flash","GLM 4.7 Flash"]];
-  let si=0;
-  while(jobs.length<target && si<SPECIALIST_ROLES.length && specialistProviders.length){
-    const role=SPECIALIST_ROLES[si],provider=specialistProviders[si%specialistProviders.length],idx=si++;
-    if(provider==="openrouter")add({provider:"OpenRouter",name:`OpenRouter Specialist ${idx+1}`,modelId:"openrouter/free",role,brainType:"specialist-agent",healthName:"openrouter",run:()=>openRouterSpecificCouncilMember(payload,"openrouter/free",`OpenRouter Specialist ${idx+1}`,role)});
-    else if(provider==="groq"){
-      const [modelId,name]=groqModels[idx%groqModels.length];add({provider:"Groq",name:`${name} Specialist`,modelId,role,brainType:"specialist-agent",healthName:"groq",run:()=>groqCouncilMember(payload,modelId,`${name} Specialist`,role)});
-    }else if(provider==="cloudflare"){
-      const [modelId,name]=cfModels[idx%cfModels.length];add({provider:"Cloudflare",name:`${name} Specialist`,modelId,role,brainType:"specialist-agent",healthName:"cloudflare",run:()=>cloudflareCouncilMember({...payload,_cfModel:modelId,_cfName:`${name} Specialist`,specialistRole:role})});
-    }else add({provider:"Google",name:`Gemini Specialist ${idx+1}`,modelId:"gemini-specialist",role,brainType:"specialist-agent",healthName:"geminiText",run:()=>geminiSpecialistMember(payload,role,idx)});
-  }
-
-  let members=[...(existingMembers||[])],cursor=0,stoppedEarly=false,stopReason="";
-  const waveSize=8;
+  let members=[...existingAi],cursor=0,stoppedEarly=false,stopReason="";
+  const waveSize=3;
   while(members.length<target && cursor<jobs.length){
     const needed=Math.min(waveSize,target-members.length);
     const wave=jobs.slice(cursor,cursor+needed);cursor+=needed;
-    const fresh=await runInBatches(wave,4);members.push(...fresh);
+    const fresh=await runInBatches(wave,3);members.push(...fresh);
     const agg=aggregateCouncil(members);
     const uc=agg.uniqueModelConsensus||{};
-    if(target>12 && members.length>=12 && uc.uniqueModels>=3 && uc.convergence==="HIGH" && uc.share>=0.67){stoppedEarly=true;stopReason="Adaptive stop: strong agreement across at least 3 independent underlying models/engines.";break;}
-    if(target>24 && members.length>=24 && uc.uniqueModels>=4 && ["HIGH","MEDIUM"].includes(uc.convergence) && uc.share>=0.60){stoppedEarly=true;stopReason="Adaptive stop: stable multi-model agreement after a deep council wave.";break;}
-    if(cursor<jobs.length&&members.length<target)await sleep(700);
+    if(members.length>=3 && uc.uniqueModels>=3 && uc.convergence==="HIGH" && uc.share>=0.67){
+      stoppedEarly=true;stopReason="Adaptive stop: at least 3 independent AI models reached strong agreement.";break;
+    }
+    if(cursor<jobs.length&&members.length<target)await sleep(500);
   }
+
+  const statisticalChecker=deterministicCouncilMember(payload);
   const counts=councilSummaryCounts(members),aggregation=aggregateCouncil(members);
   return {
-    checkedAt:isoNow(),requestedAgentSeats:target,members,counts,aggregation,stoppedEarly,stopReason,
-    providerHealth:providerHealthSnapshot(),
-    warning:target>=20?"Large council targets are adaptive. The app expands in waves and may stop early when independent underlying models converge, protecting free quotas.":""
+    checkedAt:isoNow(),requestedIndependentModels:target,requestedAgentSeats:target,members,counts,aggregation,
+    statisticalChecker,stoppedEarly,stopReason,providerHealth:providerHealthSnapshot(),
+    councilReady:aggregation.uniqueUnderlyingModels>=COUNCIL_MIN_MODELS,
+    minimumIndependentModels:COUNCIL_MIN_MODELS,
+    warning:aggregation.uniqueUnderlyingModels<COUNCIL_MIN_MODELS
+      ? `Council not independently verified: ${aggregation.uniqueUnderlyingModels} independent AI model(s) completed; ${COUNCIL_MIN_MODELS} required.`
+      : "Council consensus uses independent underlying AI models only; the statistical checker is separate."
   };
 }
+
 async function apiFootballPrediction(fixtureId){
   if(!process.env.API_FOOTBALL_KEY)return {available:false,checkedAt:isoNow(),reason:"API-Football unavailable; prediction benchmark skipped."};
   if(!fixtureId)return {available:false,checkedAt:isoNow(),reason:"No API-Football fixture ID."};
@@ -2883,14 +2894,14 @@ async function geminiTextWithRetry({prompt,maxOutputTokens=9000,responseMimeType
 
   for(const model of fallbackModels){
     for(let attempt=1;attempt<=3;attempt++){
-      const response=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,{
+      const response=await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,{
         method:"POST",
         headers:{"Content-Type":"application/json","x-goog-api-key":key},
         body:JSON.stringify({
           contents:[{parts:[{text:prompt}]}],
           generationConfig:{temperature:0.15,maxOutputTokens,responseMimeType}
         })
-      });
+      },AI_REQUEST_TIMEOUT_MS);
       const text=await response.text();
 
       if(response.ok){
@@ -2933,14 +2944,14 @@ async function groqPrimaryAnalyze(payload,model="openai/gpt-oss-120b",display="O
   const key=requireEnv("GROQ_API_KEY");
   usageStart("groq");
   try{
-    const response=await fetch("https://api.groq.com/openai/v1/chat/completions",{
+    const response=await fetchWithTimeout("https://api.groq.com/openai/v1/chat/completions",{
       method:"POST",
       headers:{"Content-Type":"application/json","Authorization":`Bearer ${key}`},
       body:JSON.stringify({
         model,temperature:0.15,max_completion_tokens:9000,
         messages:[{role:"user",content:analysisPrompt(payload)}]
       })
-    });
+    },AI_REQUEST_TIMEOUT_MS);
     const txt=await response.text();
     if(!response.ok)throw new Error(`${display} primary analysis failed (${response.status}): ${txt.slice(0,320)}`);
     const d=parseHttpJson(txt,display);
@@ -2955,14 +2966,14 @@ async function cloudflarePrimaryAnalyze(payload,modelId,display){
   if(!account||!token)throw new Error("Cloudflare Workers AI is not configured.");
   usageStart("cloudflare");
   try{
-    const response=await fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(account)}/ai/run/${modelId}`,{
+    const response=await fetchWithTimeout(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(account)}/ai/run/${modelId}`,{
       method:"POST",
       headers:{"Content-Type":"application/json","Authorization":`Bearer ${token}`},
       body:JSON.stringify({
         messages:[{role:"user",content:analysisPrompt(payload)}],
         temperature:0.15,max_tokens:9000
       })
-    });
+    },AI_REQUEST_TIMEOUT_MS);
     const txt=await response.text();
     if(!response.ok)throw new Error(`${display} primary analysis failed (${response.status}): ${txt.slice(0,320)}`);
     const d=parseHttpJson(txt,display);
@@ -2978,7 +2989,7 @@ async function openRouterPrimaryAnalyze(payload){
   const model=process.env.OPENROUTER_PRIMARY_MODEL||"openrouter/free";
   usageStart("openrouter");
   try{
-    const response=await fetch("https://openrouter.ai/api/v1/chat/completions",{
+    const response=await fetchWithTimeout("https://openrouter.ai/api/v1/chat/completions",{
       method:"POST",
       headers:{
         "Content-Type":"application/json","Authorization":`Bearer ${key}`,
@@ -2990,7 +3001,7 @@ async function openRouterPrimaryAnalyze(payload){
         response_format:{type:"json_object"},
         messages:[{role:"user",content:analysisPrompt(payload)}]
       })
-    });
+    },AI_REQUEST_TIMEOUT_MS);
     const txt=await response.text();
     if(!response.ok)throw new Error(`OpenRouter Free primary analysis failed (${response.status}): ${txt.slice(0,320)}`);
     const d=parseHttpJson(txt,"OpenRouter Primary");
@@ -3174,12 +3185,12 @@ Do not add markdown or commentary outside the JSON.`;
 
 app.get("/api/version",(req,res)=>{
   res.setHeader("Cache-Control","no-store");
-  res.json({ok:true,version:"6.3.0",protocol:"adaptive-100-brain-v1"});
+  res.json({ok:true,version:APP_VERSION,protocol:"independent-ai-council-v2"});
 });
 
 app.get("/api/health",(req,res)=>{
   res.json({
-    ok:true,version:"6.3.0",
+    ok:true,version:APP_VERSION,
     tavilyConfigured:Boolean(process.env.TAVILY_API_KEY),
     builtinSearchEnabled:true,
     searchFleetProviders:["Google HTML best-effort","Bing HTML","DuckDuckGo HTML",...(process.env.TAVILY_API_KEY?["Tavily"]:[])],
@@ -3192,7 +3203,10 @@ app.get("/api/health",(req,res)=>{
     footballDataOrgConfigured:Boolean(process.env.FOOTBALL_DATA_ORG_KEY),
     theSportsDBConfigured:true,
     scoreBatConfigured:Boolean(process.env.SCOREBAT_TOKEN),
-    model:process.env.GEMINI_MODEL||"gemini-3.8-flash"
+    model:process.env.GEMINI_MODEL||"gemini-3.8-flash",
+    councilMinIndependentModels:COUNCIL_MIN_MODELS,
+    councilMaxModels:COUNCIL_MAX_MODELS,
+    aiRequestTimeoutMs:AI_REQUEST_TIMEOUT_MS
   });
 });
 
@@ -3203,6 +3217,53 @@ app.get("/api/research-progress/:id",(req,res)=>{
   const p=researchProgress.get(String(req.params.id||""));
   if(!p)return res.status(404).json({ok:false,error:"Progress job not found or already expired."});
   res.json({ok:true,...p});
+});
+
+async function aiPreflight(){
+  const checks=[];
+  const prompt='Return ONLY this JSON object: {"status":"READY"}';
+  const push=(provider,configured,ok,model,error='')=>checks.push({provider,configured,ok,model:model||'',error:String(error||'').slice(0,240)});
+
+  if(process.env.GEMINI_API_KEY){
+    try{const r=await geminiTextWithRetry({prompt,maxOutputTokens:80,responseMimeType:'application/json',preferredModel:process.env.GEMINI_COUNCIL_MODEL||process.env.GEMINI_MODEL||'gemini-3.8-flash'});push('Gemini',true,true,r.model);}
+    catch(e){push('Gemini',true,false,'',e.message);}
+  }else push('Gemini',false,false,'','Not configured');
+
+  if(process.env.OPENROUTER_API_KEY){
+    try{
+      const r=await fetchWithTimeout('https://openrouter.ai/api/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${process.env.OPENROUTER_API_KEY}`,'HTTP-Referer':process.env.APP_PUBLIC_URL||'https://localhost/','X-Title':'Football Fact-First Research'},body:JSON.stringify({model:'openrouter/free',temperature:0,max_tokens:80,messages:[{role:'user',content:prompt}]})},AI_REQUEST_TIMEOUT_MS);
+      const text=await r.text();if(!r.ok)throw new Error(`HTTP ${r.status}: ${text.slice(0,180)}`);const d=parseHttpJson(text,'OpenRouter preflight');push('OpenRouter',true,true,d.model||'openrouter/free');
+    }catch(e){push('OpenRouter',true,false,'',e.message);}
+  }else push('OpenRouter',false,false,'','Not configured');
+
+  if(process.env.GROQ_API_KEY){
+    try{
+      const model='openai/gpt-oss-20b';
+      const r=await fetchWithTimeout('https://api.groq.com/openai/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${process.env.GROQ_API_KEY}`},body:JSON.stringify({model,temperature:0,max_completion_tokens:80,messages:[{role:'user',content:prompt}]})},AI_REQUEST_TIMEOUT_MS);
+      const text=await r.text();if(!r.ok)throw new Error(`HTTP ${r.status}: ${text.slice(0,180)}`);push('Groq',true,true,model);
+    }catch(e){push('Groq',true,false,'',e.message);}
+  }else push('Groq',false,false,'','Not configured');
+
+  if(process.env.CLOUDFLARE_ACCOUNT_ID&&process.env.CLOUDFLARE_AUTH_TOKEN){
+    try{
+      const model=process.env.CLOUDFLARE_LLAMA_MODEL||'@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+      const r=await fetchWithTimeout(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(process.env.CLOUDFLARE_ACCOUNT_ID)}/ai/run/${model}`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${process.env.CLOUDFLARE_AUTH_TOKEN}`},body:JSON.stringify({messages:[{role:'user',content:prompt}],temperature:0,max_tokens:80})},AI_REQUEST_TIMEOUT_MS);
+      const text=await r.text();if(!r.ok)throw new Error(`HTTP ${r.status}: ${text.slice(0,180)}`);push('Cloudflare',true,true,model);
+    }catch(e){push('Cloudflare',true,false,'',e.message);}
+  }else push('Cloudflare',false,false,'','Not configured');
+
+  let openRouterFreeModelsCount=0;
+  if(process.env.OPENROUTER_API_KEY){try{openRouterFreeModelsCount=(await openRouterFreeModels()).length;}catch{}}
+  const respondingProviders=checks.filter(x=>x.ok).length;
+  // OpenRouter can supply several independent underlying models; otherwise each working provider contributes at least one.
+  const potentialIndependentModels=Math.min(COUNCIL_MAX_MODELS,(checks.find(x=>x.provider==='OpenRouter'&&x.ok)?Math.max(1,openRouterFreeModelsCount):0)+checks.filter(x=>x.ok&&x.provider!=='OpenRouter').length);
+  return {checkedAt:isoNow(),checks,respondingProviders,openRouterFreeModelsCount,potentialIndependentModels,councilReady:potentialIndependentModels>=COUNCIL_MIN_MODELS,minimumIndependentModels:COUNCIL_MIN_MODELS};
+}
+
+app.get('/api/ai-preflight',async(req,res)=>{
+  res.setHeader('Cache-Control','no-store');
+  try{res.json({ok:true,...await aiPreflight()});}
+  catch(err){res.status(500).json({ok:false,error:err.message||'AI preflight failed.'});}
 });
 
 app.get("/api/provider-status",async(req,res)=>{
@@ -3297,7 +3358,7 @@ async function executeResearchJob(body,progressId){
   const round=Math.max(1,Math.min(20,Number(body?.round||1)));
   const originalMarket=String(body?.originalMarket||"").trim().slice(0,180);
   const previousRounds=Array.isArray(body?.previousRounds)?body.previousRounds:[];
-  const councilSize=Math.max(1,Math.min(100,Number(body?.councilSize||8)));
+  const councilSize=Math.max(COUNCIL_MIN_MODELS,Math.min(COUNCIL_MAX_MODELS,Number(body?.councilSize||4)));
 
   const researchMode=String(body?.researchMode||"deep").toLowerCase();
   setResearchProgress(progressId,{percent:6,stage:"Initial identity check",stageNumber:2,totalStages:12,message:`Round ${round}: resolving team identities and checking structured fixture providers.`});
@@ -3472,7 +3533,7 @@ app.post("/api/research",(req,res)=>{
   res.status(409).json({
     ok:false,
     code:"CLIENT_UPDATE_REQUIRED",
-    requiredVersion:"3.8.0",
+    requiredVersion:APP_VERSION,
     error:"Your browser is running an older Football Fact-First interface. Reopen the live Render URL so public/index.html updates to v3.8 before starting research."
   });
 });
@@ -3482,4 +3543,4 @@ app.use((req,res)=>{
   res.setHeader("Cache-Control","no-cache, no-store, must-revalidate");
   res.sendFile(path.join(__dirname,"public","index.html"));
 });
-app.listen(PORT,()=>console.log(`Football Fact-First Research v6.3 running on port ${PORT}`));
+app.listen(PORT,()=>console.log(`Football Fact-First Research v${APP_VERSION} running on port ${PORT}`));

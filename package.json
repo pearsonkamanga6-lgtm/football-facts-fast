@@ -1,15 +1,17 @@
 {
   "name": "football-factfirst-research",
-  "version": "6.3.0",
+  "version": "7.0.0",
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "check": "node --check server.js && node --check public/service-worker.js"
   },
   "dependencies": {
-    "express": "^5.1.0",
-    "@google/genai": "^2.0.0",
-    "jsonrepair": "^3.13.1",
-    "cheerio": "^1.0.0"
-  }
+    "express": "5.1.0",
+    "@google/genai": "2.0.0",
+    "jsonrepair": "3.13.1",
+    "cheerio": "1.0.0"
+  },
+  "description": "Football Fact-First v7.0 stability rebuild with independent AI Council diagnostics and resilient provider timeouts."
 }
