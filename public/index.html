@@ -124,7 +124,7 @@ Leave blank for pure market discovery."></textarea></div>
 
 <section id="tab-settings" class="hidden">
 <div class="panel">
-<h2>Research engine setup <span class="pill VERIFIED">v__APP_VERSION__</span></h2><p class="tiny muted">v7 repairs the AI Council and deployment layer: live AI-provider preflight, independent-model consensus, hard provider timeouts, a separate statistical checker and safer PWA updating.</p>
+<h2>Research engine setup <span class="pill VERIFIED">v__APP_VERSION__</span></h2><p class="tiny muted">v7.0.1 adds a reliable-search rescue layer: if cloud-hosted Google/Bing/DuckDuckGo HTML returns nothing, the server can fall back to Tavily or Gemini live Google Search grounding instead of falsely saying the fixture has no public evidence.</p>
 <p>Add these Environment Variables in Render. Keep all keys on the server, never in the browser:</p>
 <ul>
 <li><code>API_FOOTBALL_KEY</code> — structured football facts, predictions and bookmaker odds.</li>
@@ -139,7 +139,7 @@ Leave blank for pure market discovery."></textarea></div>
 <li><code>THESPORTSDB_API_KEY</code> — optional; free V1 key defaults to <code>123</code>.</li>
 </ul>
 <div class="status" id="configStatus">Checking configuration…</div>
-<div class="actions"><button class="secondary" id="refreshHealth">Recheck Setup</button><button class="secondary" id="providerTest">Test API-Football Key</button><button class="secondary" id="aiCouncilTest">Test AI Council</button></div>
+<div class="actions"><button class="secondary" id="refreshHealth">Recheck Setup</button><button class="secondary" id="webSearchTest">Test Web Research</button><button class="secondary" id="providerTest">Test API-Football Key</button><button class="secondary" id="aiCouncilTest">Test AI Council</button></div>
 <div class="actions"><button class="secondary" id="refreshProviders">Refresh Provider / Quota Board</button></div>
 <div class="status warn" style="margin-top:12px"><strong>Important:</strong> A Council result now requires at least two independent AI models. The local statistical checker is displayed separately and never counts as an AI vote. For the easiest multi-model setup, connect <code>OPENROUTER_API_KEY</code>; Gemini, Groq and Cloudflare remain optional additional independent providers.</div>
 <div id="providerBoard" class="chartbox"><div class="chart-title">🔌 Provider & Quota Board</div><p class="tiny muted">Shows configured fallbacks and calls made by this Render server instance.</p></div>
@@ -196,11 +196,22 @@ async function checkHealth(){
    badge.textContent=ok?(d.anyPrimaryAiConfigured?"Research engine ready — test AI Council":"Data engine ready — AI Council not configured"):"Setup needed";
    badge.style.color=ok?"var(--good)":"var(--warn)";
    box.className="status "+(ok?"good":"warn");
-   box.innerHTML=`Research fleet: Built-in search <strong>${d.builtinSearchEnabled?"✓":"missing"}</strong> • Tavily <strong>${d.tavilyConfigured?"✓ optional":"optional"}</strong> • AI providers configured <strong>${d.anyPrimaryAiConfigured?"✓":"none"}</strong><br><span class="tiny muted">Primary text-AI order: OpenRouter ${d.openRouterConfigured?"✓":"—"} → Groq ${d.groqConfigured?"✓":"—"} → Cloudflare ${d.cloudflareConfigured?"✓":"—"} → Gemini ${d.geminiConfigured?"✓":"—"} (Gemini quota preserved for video)<br>Structured data: API-Football <strong>${d.apiFootballConfigured?"✓":"fallback mode"}</strong> • football-data.org <strong>${d.footballDataOrgConfigured?"✓":"not connected"}</strong> • TheSportsDB <strong>✓ free fallback</strong> • ScoreBat <strong>${d.scoreBatConfigured?"✓":"not connected"}</strong></span>`;
+   box.innerHTML=`Research fleet: HTML search <strong>${d.builtinSearchEnabled?"✓ best-effort":"missing"}</strong> • Reliable live-search rescue <strong>${d.reliableSearchConfigured?"✓":"NOT CONFIGURED"}</strong> • Tavily <strong>${d.tavilyConfigured?"✓":"—"}</strong> • Gemini Google Search <strong>${d.geminiGroundedSearchConfigured?"✓":"—"}</strong><br><span class="tiny muted">AI providers: OpenRouter ${d.openRouterConfigured?"✓":"—"} → Groq ${d.groqConfigured?"✓":"—"} → Cloudflare ${d.cloudflareConfigured?"✓":"—"} → Gemini ${d.geminiConfigured?"✓":"—"}<br>Structured data: API-Football <strong>${d.apiFootballConfigured?"✓":"fallback mode"}</strong> • football-data.org <strong>${d.footballDataOrgConfigured?"✓":"not connected"}</strong> • TheSportsDB <strong>✓ free fallback</strong> • ScoreBat <strong>${d.scoreBatConfigured?"✓":"not connected"}</strong></span>`;
    return ok;
  }catch(e){badge.textContent="Server unavailable";box.className="status bad";box.textContent=e.message;return false}
 }
 document.getElementById("refreshHealth").onclick=checkHealth;
+document.getElementById("webSearchTest").onclick=async()=>{
+ const box=document.getElementById("providerStatus");box.classList.remove("hidden");box.className="status";
+ const fixture=(typeof parseLines==="function"?parseLines("fixturesInput")[0]:"")||"football fixture schedule current";
+ box.textContent=`Testing live web research for: ${fixture}…`;
+ try{
+   const r=await fetch(`/api/search-preflight?q=${encodeURIComponent(fixture)}`,{cache:"no-store"}),d=await readJsonResponse(r,"Web research preflight");if(!r.ok)throw new Error(d.error||"Web research test failed");
+   const rows=(d.checks||[]).map(x=>`${x.provider}: ${x.ok?`✓ ${x.count} result${x.count===1?"":"s"}`:x.configured?`✗ ${x.error||"no results"}`:"not configured"}`).join("<br>");
+   box.className="status "+(d.reliableReady?"good":d.anyReady?"warn":"bad");
+   box.innerHTML=`<strong>${d.reliableReady?"WEB RESEARCH READY":d.anyReady?"WEB RESEARCH DEGRADED":"WEB RESEARCH FAILED"}</strong><br>${rows}<br><span class="tiny">${esc(d.recommendation||"")}</span>`;
+ }catch(e){box.className="status bad";box.textContent=e.message}
+};
 document.getElementById("providerTest").onclick=async()=>{
  const box=document.getElementById("providerStatus");box.classList.remove("hidden");box.className="status";box.textContent="Testing API-Football…";
  try{const r=await fetch("/api/provider-test",{cache:"no-store"}),d=await readJsonResponse(r,"API-Football test");if(!r.ok)throw new Error(d.error||"Provider test failed");box.className="status good";box.textContent=`API-Football key works. Daily requests remaining: ${d.quota?.dailyRemaining??"unknown"} / ${d.quota?.dailyLimit??"unknown"}.`;}
@@ -354,7 +365,7 @@ document.getElementById("startBtn").onclick=async()=>{
  if(!(await checkAppVersion()))return;
  const fixtures=parseLines("fixturesInput"),markets=parseLines("marketsInput");
  if(!fixtures.length){alert("Paste at least one fixture.");return}
- if(!(await checkHealth())){alert("Setup is incomplete. The built-in research fleet must be available. Tavily is now optional. For full AI synthesis connect at least one AI provider; structured football APIs remain recommended but are no longer the only research path.");return}
+ if(!(await checkHealth())){alert("Setup is incomplete. Use Setup → Test Web Research first. HTML search is only best-effort on cloud hosts; Tavily or Gemini Google Search rescue is recommended. For AI synthesis connect at least one AI provider.");return}
  const session={id:crypto.randomUUID(),createdAt:new Date().toISOString(),fixtures:fixtures.map((name,i)=>({name,originalMarket:markets[i]||"",rounds:[],status:"waiting"}))};
  state.sessions.unshift(session);state.sessions=state.sessions.slice(0,30);saveState();activeSession=session;renderSession(session);await runSession(session)
 };
