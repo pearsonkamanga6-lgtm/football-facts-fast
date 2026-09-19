@@ -1,6 +1,6 @@
 {
   "name": "football-factfirst-research",
-  "version": "7.0.0",
+  "version": "7.0.1",
   "private": true,
   "type": "commonjs",
   "scripts": {
@@ -13,5 +13,5 @@
     "jsonrepair": "3.13.1",
     "cheerio": "1.0.0"
   },
-  "description": "Football Fact-First v7.0 stability rebuild with independent AI Council diagnostics and resilient provider timeouts."
+  "description": "Football Fact-First v7.0.1 search-rescue hotfix with Gemini Google Search grounding fallback, web-search preflight and transparent provider diagnostics."
 }

@@ -1,38 +1,46 @@
-FOOTBALL FACT-FIRST RESEARCH v6.1 — EVIDENCE QUALITY GUARD
+FOOTBALL FACT-FIRST RESEARCH v7.0.1 — SEARCH RESCUE + STABILITY + INDEPENDENT AI COUNCIL
 
-For your existing GitHub + Render deployment:
+WHAT CHANGED
+- Added a bounded Gemini Google Search grounding rescue when cloud-hosted HTML search returns zero usable evidence.
+- Added Setup → Test Web Research with provider-by-provider diagnostics.
+- Empty-search errors now explain which providers failed instead of claiming the fixture has no public evidence.
+- Fixed the broken v6.3 service worker and made PWA registration failures visible.
+- package.json is now the single runtime version source.
+- Added real AI Council preflight testing: Gemini, OpenRouter, Groq and Cloudflare are actually called.
+- The deterministic statistical checker is separate and NEVER counts as an AI Council vote.
+- Council targets are now 3/4/6/8 independent AI models instead of misleading 8/25/50/100 agent seats.
+- Added hard timeouts to AI provider calls so one stalled provider cannot freeze the whole round.
+- Reduced quota waste and improved failure reporting.
+- Extended in-memory job retention from 45 to 90 minutes.
+- Browser research deadline is 20 minutes.
 
-ROOT OF THE REPOSITORY
-1. Upload/replace: server.js
-2. Upload/replace: package.json
+DEPLOYMENT — MOBILE FRIENDLY
+ROOT OF GITHUB REPOSITORY:
+  server.js
+  package.json
+  package-lock.json (if included)
+  env.example (reference only; do not upload secrets)
 
-PUBLIC FOLDER
-3. Open the public folder in GitHub.
-4. Upload/replace:
-   - index.html
-   - service-worker.js
-   - manifest.webmanifest
-5. The two icon PNG files do NOT need to be replaced for this update.
+INSIDE public/:
+  index.html
+  service-worker.js
+  manifest.webmanifest
+  icon-192.png
+  icon-512.png
 
-DEPLOY
-6. Commit the changes.
-7. Let Render auto-deploy.
-8. Open the live Render URL again.
-9. Confirm the header says v6.1.
+RENDER
+Build command: npm ci (use npm install if package-lock.json is not present)
+Start command: npm start
 
-WHAT v6.1 FIXES
-- Rejects irrelevant search results such as animal pages for “Lion” and unrelated “BG” pages.
-- Checks relevance again after opening a page, so a misleading search snippet cannot enter final evidence.
-- Keeps rejected URLs visible in the source audit but excludes them from analysis.
-- Decodes Bing redirect links before judging the real website/domain.
-- Balances the source budget across research questions instead of allowing noisy early queries to consume the whole source limit.
-- Uses independent web fixture verification to strengthen team-identity confidence when API-Football is unavailable.
-- Does not call a one-domain market phrase “multi-source”.
-- Normalizes equivalent market wording before AI-council convergence is calculated.
-- Counts repeated Gemini specialist prompts as one underlying Gemini model for unique-model consensus.
-- Repairs shortlist rendering when an AI returns market scores but an incomplete shortlist.
-- Searches external benchmark sites through the whole search fleet and reads the actual page.
-- Adds a local explicit-prediction parser so a clearly labelled website prediction can still be extracted even when Gemini text quota is unavailable.
+AFTER DEPLOYMENT
+1. Open the Render URL while you have data/Wi-Fi.
+2. Go to Setup.
+3. Tap Recheck Setup.
+4. Paste a fixture and tap Test Web Research.
+5. Confirm WEB RESEARCH READY (Tavily or Gemini Google Search rescue).
+6. Tap Test AI Council.
+7. Do not trust the Council label unless it says AI COUNCIL READY.
+8. Recommended Council size: 4 independent models.
 
 IMPORTANT
-The 100-brain council remains adaptive. It can use up to 100 agent seats, but unique-model consensus is kept separate from repeated specialist agents.
+A working API-Football key does NOT prove that the AI Council works. Test them separately.

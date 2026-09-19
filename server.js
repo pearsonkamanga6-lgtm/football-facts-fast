@@ -1579,6 +1579,119 @@ async function duckDuckGoHtmlSearch(query,maxResults=8){
   }catch(err){usage.fail=(usage.fail||0)+1;usage.lastError=String(err?.message||err).slice(0,240);return [];}
 }
 
+async function geminiGroundedSearch(query,maxResults=8){
+  if(!process.env.GEMINI_API_KEY)return {results:[],answer:"",queries:[],error:"GEMINI_API_KEY not configured"};
+  const usage=providerUsage.geminiSearch||{};usage.calls=(usage.calls||0)+1;providerUsage.geminiSearch=usage;
+  const model=process.env.GEMINI_SEARCH_MODEL||process.env.GEMINI_MODEL||"gemini-3.8-flash";
+  try{
+    const prompt=`Search the current public web for this football research question. Use live Google Search grounding. Focus only on the named clubs/fixture and current 2026 evidence. Give a concise factual evidence digest; do not invent unavailable facts. Research question: ${query}`;
+    const response=await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,{
+      method:"POST",
+      headers:{"Content-Type":"application/json","x-goog-api-key":process.env.GEMINI_API_KEY},
+      body:JSON.stringify({
+        contents:[{role:"user",parts:[{text:prompt}]}],
+        tools:[{google_search:{}}],
+        generationConfig:{temperature:0.1,maxOutputTokens:1200}
+      })
+    },Math.min(Math.max(AI_REQUEST_TIMEOUT_MS,30000),60000));
+    const text=await response.text();
+    if(!response.ok)throw new Error(`Gemini Google Search failed (${response.status}): ${text.slice(0,220)}`);
+    const data=parseHttpJson(text,"Gemini Google Search");
+    const cand=data?.candidates?.[0]||{};
+    const answer=(cand?.content?.parts||[]).map(p=>p?.text||"").join("\n").trim();
+    const gm=cand?.groundingMetadata||cand?.grounding_metadata||{};
+    const chunks=gm?.groundingChunks||gm?.grounding_chunks||[];
+    const queries=gm?.webSearchQueries||gm?.web_search_queries||[];
+    const out=[];
+    for(const ch of chunks){
+      const web=ch?.web||ch?.webChunk||{};
+      const url=web?.uri||web?.url||"";
+      const row=simpleResult(web?.title||sourceDomain(url)||"Grounded web source",url,answer.slice(0,4000),"gemini-google-search");
+      if(row&&!out.some(x=>x.url===row.url))out.push(row);
+      if(out.length>=maxResults)break;
+    }
+    usage.success=(usage.success||0)+1;
+    return {results:out,answer,queries,model};
+  }catch(err){
+    usage.fail=(usage.fail||0)+1;usage.lastError=String(err?.message||err).slice(0,240);
+    return {results:[],answer:"",queries:[],model,error:usage.lastError};
+  }
+}
+
+async function buildGroundedSearchRescue({fixture,gate,round=1,progressId}){
+  if(!process.env.GEMINI_API_KEY)return {entries:[],providerLog:[],rejected:[],ledger:[],summary:{mode:"gemini-grounded-rescue",acceptedRelevant:0,rejectedIrrelevant:0},createdAt:isoNow()};
+  const home=gate?.requested?.home||gate?.resolved?.home?.name||"";
+  const away=gate?.requested?.away||gate?.resolved?.away?.name||"";
+  const exact=`"${home}" vs "${away}"`;
+  const year=new Date().getUTCFullYear();
+  const tasks=[
+    {id:"GR1",category:"fixture",question:"Fixture/date/kickoff rescue",query:`${exact} ${year} exact fixture date kickoff competition venue`},
+    {id:"GR2",category:"form10",question:"Recent form and statistics rescue",query:`${exact} ${year} recent form last 5 last 10 goals shots shots on target corners possession statistics`},
+    {id:"GR3",category:"injuries",question:"Squad/team-news rescue",query:`${exact} ${year} latest squad injuries suspensions likely lineup team news`},
+    {id:"GR4",category:"tactics",question:"Tactical/context rescue",query:`${exact} ${year} tactical preview home away form opponent strength H2H motivation`}
+  ];
+  const byUrl=new Map(),providerLog=[],rejected=[];
+  for(let i=0;i<tasks.length;i++){
+    const task=tasks[i];
+    if(progressId)setResearchProgress(progressId,{percent:44+Math.round(((i+1)/tasks.length)*8),stage:"Grounded web rescue",stageNumber:5,totalStages:12,message:`Built-in HTML search returned no usable evidence. Gemini live Google Search rescue ${i+1}/${tasks.length}: ${task.question}.`});
+    const g=await geminiGroundedSearch(task.query,8);
+    providerLog.push({taskId:task.id,category:task.category,query:task.query,groups:[{provider:"gemini-google-search",results:g.results||[],error:g.error||"",queries:g.queries||[]}]});
+    let accepted=0;
+    for(const r of g.results||[]){
+      const u=safePublicUrl(r.url);if(!u)continue;
+      const combined=`${r.title||""} ${r.content||""} ${u.href}`;
+      if(!pageRelevantForCategories(combined,[task.category],home,away)){
+        rejected.push({title:r.title||u.href,url:u.href,provider:"gemini-google-search",query:task.query,category:task.category,reason:"Grounded result did not confirm the requested club identity."});
+        continue;
+      }
+      const existing=byUrl.get(u.href);
+      const kind=sourceKind(u.href,r.title,task.query);
+      const row=existing||{url:u.href,title:r.title||u.hostname,snippet:r.content||g.answer||"",provider:"gemini-google-search",discoveredBy:[],categories:[],opened:false,usable:true,relevant:true,kind,reliability:Math.max(78,sourceReliability(kind)),extractedText:r.content||g.answer||"",contentLength:(r.content||g.answer||"").length};
+      if(!row.discoveredBy.includes(task.query))row.discoveredBy.push(task.query);
+      if(!row.categories.includes(task.category))row.categories.push(task.category);
+      row.usable=true;row.relevant=true;row.extractedText=row.extractedText||r.content||g.answer||"";row.fingerprint=contentFingerprint(row.extractedText||row.snippet||u.href);
+      byUrl.set(u.href,row);accepted++;
+    }
+    task.results=accepted;task.domains=new Set((g.results||[]).map(x=>sourceDomain(x.url)).filter(Boolean)).size;task.status=accepted?"rescued":"unavailable";
+  }
+  const entries=[...byUrl.values()];
+  return {mode:"gemini-grounded-rescue",ledger:tasks,entries,rejected,providerLog,summary:{mode:"gemini-grounded-rescue",acceptedRelevant:entries.length,rejectedIrrelevant:rejected.length,usableSources:entries.filter(x=>x.usable).length},createdAt:isoNow()};
+}
+
+function mergeResearchWarehouses(primary,rescue){
+  if(!rescue?.entries?.length)return primary;
+  const byUrl=new Map((primary?.entries||[]).map(x=>[x.url,x]));
+  for(const r of rescue.entries){
+    const e=byUrl.get(r.url);
+    if(e){
+      e.usable=e.usable||r.usable;e.relevant=e.relevant!==false||r.relevant!==false;
+      e.categories=[...new Set([...(e.categories||[]),...(r.categories||[])])];
+      e.discoveredBy=[...new Set([...(e.discoveredBy||[]),...(r.discoveredBy||[])])];
+      if(!e.extractedText&&r.extractedText)e.extractedText=r.extractedText;
+    }else byUrl.set(r.url,r);
+  }
+  const entries=[...byUrl.values()];
+  const merged={...primary,entries,ledger:[...(primary?.ledger||[]),...(rescue.ledger||[])],rejected:[...(primary?.rejected||[]),...(rescue.rejected||[])],providerLog:[...(primary?.providerLog||[]),...(rescue.providerLog||[])],groundedRescue:{used:true,provider:"Gemini Google Search",addedSources:rescue.entries.length}};
+  merged.summary={...(primary?.summary||{}),groundedRescueUsed:true,groundedRescueSources:rescue.entries.length,acceptedRelevant:entries.filter(x=>x.relevant!==false).length,usableSources:entries.filter(x=>x.usable&&x.relevant!==false).length};
+  return merged;
+}
+
+function searchFailureDiagnostic(warehouse){
+  const logs=warehouse?.providerLog||[];
+  const names=["tavily","google","bing","duckduckgo","gemini-google-search"];
+  const parts=[];
+  for(const name of names){
+    let seen=0,count=0,errors=[];
+    for(const log of logs)for(const g of log.groups||[]){
+      if(g.provider!==name)continue;seen++;count+=(g.results||[]).length;if(g.error)errors.push(g.error);
+    }
+    if(seen)parts.push(`${name}: ${count} result${count===1?"":"s"}${errors.length?` (${errors[0].slice(0,90)})`:""}`);
+  }
+  if(!process.env.TAVILY_API_KEY)parts.push("Tavily: not configured");
+  if(!process.env.GEMINI_API_KEY)parts.push("Gemini Google Search rescue: not configured");
+  return parts.join(" • ")||"No search-provider diagnostics were recorded.";
+}
+
 function stableHash(s){
   let h=2166136261>>>0;for(const ch of String(s||"")){h^=ch.charCodeAt(0);h=Math.imul(h,16777619);}return (h>>>0).toString(16);
 }
@@ -3185,7 +3298,7 @@ Do not add markdown or commentary outside the JSON.`;
 
 app.get("/api/version",(req,res)=>{
   res.setHeader("Cache-Control","no-store");
-  res.json({ok:true,version:APP_VERSION,protocol:"independent-ai-council-v2"});
+  res.json({ok:true,version:APP_VERSION,protocol:"independent-ai-council-v2-search-rescue"});
 });
 
 app.get("/api/health",(req,res)=>{
@@ -3193,7 +3306,9 @@ app.get("/api/health",(req,res)=>{
     ok:true,version:APP_VERSION,
     tavilyConfigured:Boolean(process.env.TAVILY_API_KEY),
     builtinSearchEnabled:true,
-    searchFleetProviders:["Google HTML best-effort","Bing HTML","DuckDuckGo HTML",...(process.env.TAVILY_API_KEY?["Tavily"]:[])],
+    reliableSearchConfigured:Boolean(process.env.TAVILY_API_KEY||process.env.GEMINI_API_KEY),
+    geminiGroundedSearchConfigured:Boolean(process.env.GEMINI_API_KEY),
+    searchFleetProviders:["Google HTML best-effort","Bing HTML","DuckDuckGo HTML",...(process.env.TAVILY_API_KEY?["Tavily"]:[]),...(process.env.GEMINI_API_KEY?["Gemini Google Search rescue"]:[])],
     geminiConfigured:Boolean(process.env.GEMINI_API_KEY),
     apiFootballConfigured:Boolean(process.env.API_FOOTBALL_KEY),
     groqConfigured:Boolean(process.env.GROQ_API_KEY),
@@ -3259,6 +3374,36 @@ async function aiPreflight(){
   const potentialIndependentModels=Math.min(COUNCIL_MAX_MODELS,(checks.find(x=>x.provider==='OpenRouter'&&x.ok)?Math.max(1,openRouterFreeModelsCount):0)+checks.filter(x=>x.ok&&x.provider!=='OpenRouter').length);
   return {checkedAt:isoNow(),checks,respondingProviders,openRouterFreeModelsCount,potentialIndependentModels,councilReady:potentialIndependentModels>=COUNCIL_MIN_MODELS,minimumIndependentModels:COUNCIL_MIN_MODELS};
 }
+
+app.get('/api/search-preflight',async(req,res)=>{
+  res.setHeader('Cache-Control','no-store');
+  const raw=String(req.query?.q||'football fixture schedule current').trim();
+  const q=raw.length>180?raw.slice(0,180):raw;
+  const checks=[];
+  async function run(name,configured,fn,usageKey){
+    if(!configured){checks.push({provider:name,configured:false,ok:false,count:0,error:'Not configured'});return;}
+    const before={...(providerUsage[usageKey]||{})};
+    try{
+      const rows=await fn();
+      const after=providerUsage[usageKey]||{};
+      const error=(after.fail||0)>(before.fail||0)?after.lastError||'Provider request failed':'';
+      checks.push({provider:name,configured:true,ok:rows.length>0,count:rows.length,error:rows.length?'':error||'No results returned'});
+    }catch(e){checks.push({provider:name,configured:true,ok:false,count:0,error:String(e.message||e).slice(0,220)});}
+  }
+  await Promise.all([
+    run('Google HTML',true,()=>googleHtmlSearch(q,5),'googleSearch'),
+    run('Bing HTML',true,()=>bingHtmlSearch(q,5),'bingSearch'),
+    run('DuckDuckGo HTML',true,()=>duckDuckGoHtmlSearch(q,5),'duckduckgo'),
+    run('Tavily',Boolean(process.env.TAVILY_API_KEY),()=>tavilySearch(q),'tavily')
+  ]);
+  if(process.env.GEMINI_API_KEY){
+    const g=await geminiGroundedSearch(q,5);
+    checks.push({provider:'Gemini Google Search rescue',configured:true,ok:(g.results||[]).length>0,count:(g.results||[]).length,error:g.error||'',model:g.model||''});
+  }else checks.push({provider:'Gemini Google Search rescue',configured:false,ok:false,count:0,error:'Not configured'});
+  const reliableReady=checks.some(x=>x.ok&&(x.provider==='Tavily'||x.provider==='Gemini Google Search rescue'));
+  const anyReady=checks.some(x=>x.ok);
+  res.json({ok:true,query:q,checks,reliableReady,anyReady,recommendation:reliableReady?'Reliable live-search path is working.':'Built-in HTML search alone is best-effort on cloud hosts. Configure/repair Tavily or Gemini Google Search rescue.'});
+});
 
 app.get('/api/ai-preflight',async(req,res)=>{
   res.setHeader('Cache-Control','no-store');
@@ -3368,7 +3513,15 @@ async function executeResearchJob(body,progressId){
   const fallbackEvidence=await collectFallbackEvidence(fixture,gate);
 
   setResearchProgress(progressId,{percent:18,stage:"Research fleet",stageNumber:4,totalStages:12,message:`Launching multi-engine research fleet in ${researchMode.toUpperCase()} mode.`});
-  const researchWarehouse=await buildResearchWarehouse({fixture,gate,round,mode:researchMode,progressId});
+  let researchWarehouse=await buildResearchWarehouse({fixture,gate,round,mode:researchMode,progressId});
+
+  // Raw Google/Bing/DuckDuckGo HTML can be blocked from cloud-hosting IPs. If they
+  // yield no usable evidence, use Gemini's supported Google Search grounding as a
+  // bounded rescue path instead of failing a real, publicly documented fixture.
+  if(!warehouseSources(researchWarehouse,4).length && process.env.GEMINI_API_KEY){
+    const rescueWarehouse=await buildGroundedSearchRescue({fixture,gate,round,progressId});
+    researchWarehouse=mergeResearchWarehouses(researchWarehouse,rescueWarehouse);
+  }
 
   gate=upgradeGateWithWarehouse(gate,fixture,researchWarehouse);
   if(gate?.fixture?.dateOnly){
@@ -3378,7 +3531,10 @@ async function executeResearchJob(body,progressId){
   const temporalGuard=fixtureTemporalGuard(gate);
 
   const sources=warehouseSources(researchWarehouse,researchMode==="maximum"?60:44);
-  if(!sources.length)throw new Error("The research fleet could not recover any usable public evidence for this fixture.");
+  if(!sources.length){
+    const diag=searchFailureDiagnostic(researchWarehouse);
+    throw new Error(`No usable public evidence was recovered even after search rescue. ${diag}. This is a search-provider problem, not proof that the fixture has no public data. Add/verify TAVILY_API_KEY or GEMINI_API_KEY, then use Test Web Research in Setup.`);
+  }
 
   const webScout=(researchWarehouse.providerLog||[]).map(x=>({category:x.category,query:x.query,results:(x.groups||[]).flatMap(g=>(g.results||[]).map(r=>({...r,searchProvider:g.provider})))}));
 
