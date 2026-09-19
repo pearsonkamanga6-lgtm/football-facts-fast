@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#071923">
-<title>Football Fact-First Research v6.3</title>
+<title>Football Fact-First Research v__APP_VERSION__</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon-192.png">
 <style>
@@ -49,7 +49,7 @@
 </head>
 <body>
 <div class="app">
-<div class="top"><div class="brand"><h1>⚽ Football Fact-First Research <span class="pill VERIFIED">v6.3</span></h1><small>Football Intelligence Research Engine • exact-kickoff rescue • research-only council fallback • resilient retries</small></div><div class="badge" id="healthBadge">Checking engine…</div></div>
+<div class="top"><div class="brand"><h1>⚽ Football Fact-First Research <span class="pill VERIFIED">v__APP_VERSION__</span></h1><small>Football Intelligence Research Engine • independent AI Council • provider preflight • resilient timeouts</small></div><div class="badge" id="healthBadge">Checking engine…</div></div>
 <div class="tabs"><button class="tab active" data-tab="session">Research Session</button><button class="tab" data-tab="postboard">POSTBOARD</button><button class="tab" data-tab="history">History</button><button class="tab" data-tab="settings">Setup</button></div>
 
 <section id="tab-session">
@@ -89,12 +89,11 @@ Leave blank for pure market discovery."></textarea></div>
 <div class="grid" style="margin-top:12px">
 <div><label><strong>Initial AI Council size</strong></label>
 <select id="councilSize" style="width:100%;background:#071923;color:var(--text);border:1px solid #285062;border-radius:11px;padding:11px">
-<option value="5">5 agents — light</option><option value="8" selected>8 agents — balanced</option>
-<option value="12">12 agents — deep</option><option value="20">20 agents — very deep</option>
-<option value="50">50-agent ceiling — adaptive</option><option value="100">100-agent ceiling — maximum adaptive council</option>
+<option value="3">3 independent AI models — minimum</option><option value="4" selected>4 independent AI models — recommended</option>
+<option value="6">6 independent AI models — deep</option><option value="8">8 independent AI models — maximum</option>
 </select></div>
-<div><label><strong>100-brain adaptive council</strong></label>
-<div class="status warn" style="margin-top:0">The ceiling is <strong>100 agent seats</strong>. Research expands in waves and can stop early when independent underlying models converge. The app keeps <strong>agent consensus</strong> separate from <strong>unique-model consensus</strong> so repeated specialist prompts cannot fake agreement.</div></div>
+<div><label><strong>Independent-model AI Council</strong></label>
+<div class="status warn" style="margin-top:0">The Council now targets <strong>independent underlying AI models</strong>, not repeated agent seats. Four independent models is recommended; eight is the maximum to protect free quotas. The local statistical checker is shown separately.</div></div>
 <div style="margin-top:12px"><label><strong>Research depth</strong></label>
 <select id="researchMode" style="width:100%;background:#071923;color:var(--text);border:1px solid #285062;border-radius:11px;padding:11px">
 <option value="standard">Standard — quicker multi-source scan</option>
@@ -125,7 +124,7 @@ Leave blank for pure market discovery."></textarea></div>
 
 <section id="tab-settings" class="hidden">
 <div class="panel">
-<h2>Research engine setup <span class="pill VERIFIED">v6.3</span></h2><p class="tiny muted">v6.1 keeps the multi-search fleet but adds a strict relevance firewall, cleaner source scoring, rejected-source auditing, semantic council convergence and stronger external-prediction extraction. If you still see an older version after deploy, close the tab and reopen the Render URL.</p>
+<h2>Research engine setup <span class="pill VERIFIED">v__APP_VERSION__</span></h2><p class="tiny muted">v7 repairs the AI Council and deployment layer: live AI-provider preflight, independent-model consensus, hard provider timeouts, a separate statistical checker and safer PWA updating.</p>
 <p>Add these Environment Variables in Render. Keep all keys on the server, never in the browser:</p>
 <ul>
 <li><code>API_FOOTBALL_KEY</code> — structured football facts, predictions and bookmaker odds.</li>
@@ -140,9 +139,9 @@ Leave blank for pure market discovery."></textarea></div>
 <li><code>THESPORTSDB_API_KEY</code> — optional; free V1 key defaults to <code>123</code>.</li>
 </ul>
 <div class="status" id="configStatus">Checking configuration…</div>
-<div class="actions"><button class="secondary" id="refreshHealth">Recheck Setup</button><button class="secondary" id="providerTest">Test API-Football Key</button></div>
+<div class="actions"><button class="secondary" id="refreshHealth">Recheck Setup</button><button class="secondary" id="providerTest">Test API-Football Key</button><button class="secondary" id="aiCouncilTest">Test AI Council</button></div>
 <div class="actions"><button class="secondary" id="refreshProviders">Refresh Provider / Quota Board</button></div>
-<div class="status warn" style="margin-top:12px"><strong>Important:</strong> Gemini is no longer a single point of failure. To keep receiving full predictions after Gemini free quota is exhausted, connect at least one backup primary AI provider — preferably <code>OPENROUTER_API_KEY</code>, or Groq / Cloudflare. If every AI provider is unavailable, the app will preserve the research and return <strong>UNRESOLVED</strong> instead of crashing or inventing a pick.</div>
+<div class="status warn" style="margin-top:12px"><strong>Important:</strong> A Council result now requires at least two independent AI models. The local statistical checker is displayed separately and never counts as an AI vote. For the easiest multi-model setup, connect <code>OPENROUTER_API_KEY</code>; Gemini, Groq and Cloudflare remain optional additional independent providers.</div>
 <div id="providerBoard" class="chartbox"><div class="chart-title">🔌 Provider & Quota Board</div><p class="tiny muted">Shows configured fallbacks and calls made by this Render server instance.</p></div>
 
 <div id="providerStatus" class="status hidden"></div>
@@ -154,11 +153,14 @@ Leave blank for pure market discovery."></textarea></div>
 </div>
 
 <script>
-const APP_VERSION="6.3.0";
+const APP_VERSION="__APP_VERSION__";
 const KEY="footballFactFirstResearch_v2";
 let state=loadState();let activeSession=null;
 function loadState(){try{return JSON.parse(localStorage.getItem(KEY))||{sessions:[]}}catch{return{sessions:[]}}}
-function saveState(){localStorage.setItem(KEY,JSON.stringify(state))}
+function saveState(){
+ try{localStorage.setItem(KEY,JSON.stringify(state));return true}
+ catch(e){console.error("Football Facts local save failed",e);const b=document.getElementById("healthBadge");if(b){b.textContent="Device storage full — export history";b.style.color="var(--danger)"}return false}
+}
 function esc(s){return String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m]))}
 function fmtDate(x){try{return new Date(x).toLocaleString()}catch{return x}}
 function classKey(c){return String(c||"").startsWith("GENUINE")?"GENUINE":String(c||"").startsWith("UNRESOLVED")?"UNRESOLVED":c||""}
@@ -191,10 +193,10 @@ async function checkHealth(){
  try{
    const r=await fetch("/api/health",{cache:"no-store"}),d=await readJsonResponse(r,"Setup check");
    const ok=versionOk&&d.builtinSearchEnabled;
-   badge.textContent=ok?(d.anyPrimaryAiConfigured?"Verified engine ready":"Data engine ready — AI optional"):"Setup needed";
+   badge.textContent=ok?(d.anyPrimaryAiConfigured?"Research engine ready — test AI Council":"Data engine ready — AI Council not configured"):"Setup needed";
    badge.style.color=ok?"var(--good)":"var(--warn)";
    box.className="status "+(ok?"good":"warn");
-   box.innerHTML=`Research fleet: Built-in search <strong>${d.builtinSearchEnabled?"✓":"missing"}</strong> • Tavily <strong>${d.tavilyConfigured?"✓ optional":"optional"}</strong> • Primary AI Router <strong>${d.anyPrimaryAiConfigured?"✓":"no AI provider connected"}</strong><br><span class="tiny muted">Primary text-AI order: OpenRouter ${d.openRouterConfigured?"✓":"—"} → Groq ${d.groqConfigured?"✓":"—"} → Cloudflare ${d.cloudflareConfigured?"✓":"—"} → Gemini ${d.geminiConfigured?"✓":"—"} (Gemini quota preserved for video)<br>Structured data: API-Football <strong>${d.apiFootballConfigured?"✓":"fallback mode"}</strong> • football-data.org <strong>${d.footballDataOrgConfigured?"✓":"not connected"}</strong> • TheSportsDB <strong>✓ free fallback</strong> • ScoreBat <strong>${d.scoreBatConfigured?"✓":"not connected"}</strong></span>`;
+   box.innerHTML=`Research fleet: Built-in search <strong>${d.builtinSearchEnabled?"✓":"missing"}</strong> • Tavily <strong>${d.tavilyConfigured?"✓ optional":"optional"}</strong> • AI providers configured <strong>${d.anyPrimaryAiConfigured?"✓":"none"}</strong><br><span class="tiny muted">Primary text-AI order: OpenRouter ${d.openRouterConfigured?"✓":"—"} → Groq ${d.groqConfigured?"✓":"—"} → Cloudflare ${d.cloudflareConfigured?"✓":"—"} → Gemini ${d.geminiConfigured?"✓":"—"} (Gemini quota preserved for video)<br>Structured data: API-Football <strong>${d.apiFootballConfigured?"✓":"fallback mode"}</strong> • football-data.org <strong>${d.footballDataOrgConfigured?"✓":"not connected"}</strong> • TheSportsDB <strong>✓ free fallback</strong> • ScoreBat <strong>${d.scoreBatConfigured?"✓":"not connected"}</strong></span>`;
    return ok;
  }catch(e){badge.textContent="Server unavailable";box.className="status bad";box.textContent=e.message;return false}
 }
@@ -203,6 +205,15 @@ document.getElementById("providerTest").onclick=async()=>{
  const box=document.getElementById("providerStatus");box.classList.remove("hidden");box.className="status";box.textContent="Testing API-Football…";
  try{const r=await fetch("/api/provider-test",{cache:"no-store"}),d=await readJsonResponse(r,"API-Football test");if(!r.ok)throw new Error(d.error||"Provider test failed");box.className="status good";box.textContent=`API-Football key works. Daily requests remaining: ${d.quota?.dailyRemaining??"unknown"} / ${d.quota?.dailyLimit??"unknown"}.`;}
  catch(e){box.className="status bad";box.textContent=e.message}
+};
+document.getElementById("aiCouncilTest").onclick=async()=>{
+ const box=document.getElementById("providerStatus");box.classList.remove("hidden");box.className="status";box.textContent="Testing configured AI providers with small live requests…";
+ try{
+   const r=await fetch("/api/ai-preflight",{cache:"no-store"}),d=await readJsonResponse(r,"AI Council preflight");if(!r.ok)throw new Error(d.error||"AI Council test failed");
+   const rows=(d.checks||[]).map(x=>`${x.provider}: ${x.ok?`✓ READY (${x.model||"model answered"})`:x.configured?`✗ FAILED — ${x.error||"no response"}`:"not configured"}`).join("<br>");
+   box.className="status "+(d.councilReady?"good":"warn");
+   box.innerHTML=`<strong>${d.councilReady?"AI COUNCIL READY":"AI COUNCIL NOT READY"}</strong><br>${rows}<br><span class="tiny">Potential independent models: ${esc(d.potentialIndependentModels||0)} • Minimum required: ${esc(d.minimumIndependentModels||2)} • OpenRouter free models discovered: ${esc(d.openRouterFreeModelsCount||0)}</span>`;
+ }catch(e){box.className="status bad";box.textContent=e.message}
 };
 checkHealth();
 
@@ -382,7 +393,7 @@ async function researchFixture(fixtureObj,round){
    method:"POST",headers:{"Content-Type":"application/json"},
    body:JSON.stringify({
      fixture:fixtureObj.name,originalMarket:fixtureObj.originalMarket,round,progressId,
-     councilSize:Number(document.getElementById("councilSize")?.value||8),
+     councilSize:Number(document.getElementById("councilSize")?.value||4),
      researchMode:String(document.getElementById("researchMode")?.value||"deep"),
      previousRounds:fixtureObj.rounds.map(x=>x.analysis)
    })
@@ -393,7 +404,7 @@ async function researchFixture(fixtureObj,round){
  startProgressPolling(fixtureObj,progressId);
 
  try{
-   const deadline=Date.now()+18*60*1000;
+   const deadline=Date.now()+20*60*1000;
    while(Date.now()<deadline){
      await new Promise(r=>setTimeout(r,1250));
      let rr,data;
@@ -423,7 +434,7 @@ async function researchFixture(fixtureObj,round){
        return data.result;
      }
    }
-   throw new Error("The research job is still running after 18 minutes. Its progress may continue on the server; retry the result later or start a fresh round.");
+   throw new Error("The research job is still running after 20 minutes. Its progress may continue on the server; retry the result later or start a fresh round.");
  }finally{
    stopProgressPolling(progressId);
  }
@@ -625,20 +636,21 @@ function councilHtml(round){
  const conv=agg.convergence||"NONE";
  if(conv==="BLOCKED"){
    return `<div class="chartbox">
-     <div class="fixture-head"><div><div class="chart-title">🧠 Independent AI Council</div><span class="tiny muted">Same evidence pack • bookmaker odds hidden</span></div><span class="pill CAUTION">NOT RUN</span></div>
+     <div class="fixture-head"><div><div class="chart-title">🧠 Independent AI Council</div><span class="tiny muted">Independent underlying models • same locked evidence • bookmaker odds hidden</span></div><span class="pill CAUTION">NOT RUN</span></div>
      <div class="status warn"><strong>AI COUNCIL — NOT RUN</strong><br>${esc(agg.note||"Fixture verification is required before council analysis.")}</div>
-     <p class="tiny muted">Agent seats 0 • Available 0 • Unique models 0 • Specialist agents 0</p>
+     <p class="tiny muted">Independent AI models 0 • Available 0</p>
    </div>`;
  }
  const researchOnly=Boolean(c.researchOnly);
  const cls=researchOnly?"CAUTION":conv==="HIGH"?"VERIFIED":(conv==="MEDIUM"||conv==="LOW")?"CAUTION":"FAILED";
  return `<div class="chartbox">
- <div class="fixture-head"><div><div class="chart-title">🧠 Independent AI Council</div><span class="tiny muted">Same evidence pack • bookmaker odds hidden</span></div><span class="pill ${cls}">${researchOnly?"RESEARCH ONLY":esc(conv)+" CONVERGENCE"}</span></div>
+ <div class="fixture-head"><div><div class="chart-title">🧠 Independent AI Council</div><span class="tiny muted">Independent underlying models • same locked evidence • bookmaker odds hidden</span></div><span class="pill ${cls}">${researchOnly?"RESEARCH ONLY":esc(conv)+" CONVERGENCE"}</span></div>
  ${researchOnly?`<div class="status warn"><strong>Research-only council:</strong> ${esc(c.researchOnlyReason||"Exact pre-match timing has not been verified, so this consensus is evidence analysis only and is not released as a betting/value conclusion.")}</div>`:""}
  <p><strong>${conv==="INSUFFICIENT"?"Council status":"Council consensus"}:</strong> <span style="color:var(--gold)">${esc(agg.consensusMarket||"NO CONSENSUS")}</span>${agg.medianFairProbabilityPct!=null?` • median fair ${esc(Math.round(agg.medianFairProbabilityPct*10)/10)}%`:""}</p>${agg.leadingSingleModelMarket?`<p class="tiny"><strong>Single-model opinion only:</strong> ${esc(agg.leadingSingleModelMarket)}</p>`:""}
- <p class="tiny muted">${esc(agg.note||"")} • Agent seats ${esc(counts.agentSeats??members.length)} / requested ${esc(c.requestedAgentSeats??members.length)} • Available ${esc(counts.availableAgents??members.filter(x=>x.available).length)} • Unique underlying models/engines ${esc(agg.uniqueUnderlyingModels??counts.uniqueModels??"—")} • Specialist agents ${esc(counts.specialistAgents??0)} • Deterministic engines ${esc(counts.deterministicEngines??0)}</p>
- ${agg.uniqueModelConsensus?`<div class="status"><strong>Unique-model consensus:</strong> ${esc(agg.uniqueModelConsensus.market||"NO CONSENSUS")} • ${esc(agg.uniqueModelConsensus.convergence||"NONE")} • ${esc(agg.uniqueModelConsensus.count||0)}/${esc(agg.uniqueModelConsensus.uniqueModels||0)} underlying models/engines<br><span class="tiny"><strong>Agent-seat consensus:</strong> ${esc(agg.agentConsensus?.market||"NO CONSENSUS")} • ${esc(agg.agentConsensus?.convergence||"NONE")} • ${esc(agg.agentConsensus?.count||0)}/${esc(agg.agentConsensus?.availableAgents||0)} available agents</span></div>`:""}
+ <p class="tiny muted">${esc(agg.note||"")} • Independent AI models ${esc(agg.uniqueUnderlyingModels??counts.uniqueModels??"—")} / requested ${esc(c.requestedIndependentModels??c.requestedAgentSeats??members.length)} • Available responses ${esc(counts.availableAgents??members.filter(x=>x.available).length)} • Minimum for consensus ${esc(c.minimumIndependentModels??2)}</p>
+ ${agg.uniqueModelConsensus?`<div class="status"><strong>Independent-model consensus:</strong> ${esc(agg.uniqueModelConsensus.market||"NO CONSENSUS")} • ${esc(agg.uniqueModelConsensus.convergence||"NONE")} • ${esc(agg.uniqueModelConsensus.count||0)}/${esc(agg.uniqueModelConsensus.uniqueModels||0)} independent AI models<br><span class="tiny"><strong>Agent-seat consensus:</strong> ${esc(agg.agentConsensus?.market||"NO CONSENSUS")} • ${esc(agg.agentConsensus?.convergence||"NONE")} • ${esc(agg.agentConsensus?.count||0)}/${esc(agg.agentConsensus?.availableAgents||0)} available agents</span></div>`:""}
  ${c.stoppedEarly?`<p class="tiny" style="color:var(--good)"><strong>Adaptive council stopped early:</strong> ${esc(c.stopReason||"")}</p>`:""}${c.warning?`<p class="tiny" style="color:var(--warn)">${esc(c.warning)}</p>`:""}
+ ${c.statisticalChecker?`<div class="status"><strong>📊 Statistical checker (not an AI Council vote):</strong> ${esc(c.statisticalChecker.primaryMarket||"UNRESOLVED")}<br><span class="tiny muted">${esc((c.statisticalChecker.strongestReasons||[]).join(" • "))}</span></div>`:""}
  <div class="council-grid">${members.map(m=>`<div class="council-card"><div class="council-model">${esc(m.modelName||m.provider||"AI")}</div>${m.available?`<div class="council-market">${esc(m.primaryMarket||"UNRESOLVED")}</div><div class="tiny">Fair: <strong>${m.fairProbabilityPct==null?"—":esc(m.fairProbabilityPct)+"%"}</strong> • ${esc(m.confidence||"")}</div><div class="tiny muted">Support: ${esc((m.strongestReasons||[]).slice(0,3).join(" • "))}</div><div class="tiny muted">Counter: ${esc((m.counterEvidence||[]).slice(0,3).join(" • "))}</div>`:`<div class="tiny" style="color:var(--danger)">Unavailable: ${esc(m.error||"provider failed")}</div>`}</div>`).join("")}</div>
  ${round.finalConvergence?`<div class="status ${String(round.finalConvergence.status).includes("CONVERGED")?"good":String(round.finalConvergence.status).includes("DISAGREE")?"warn":""}"><strong>${esc(round.finalConvergence.status)}</strong><br>${esc(round.finalConvergence.note||"")}<br><span class="tiny">Primary: ${esc(round.finalConvergence.primaryMarket||"")} • Council: ${esc(round.finalConvergence.councilMarket||"")}</span></div>`:""}
  </div>`;
@@ -741,13 +753,20 @@ function renderSession(session){
  ${session.fixtures.map((f,i)=>{const latest=f.rounds.at(-1),a=latest?.analysis||{};return `<div class="fixture"><div class="fixture-head"><div><div class="fixture-title">${i+1}. ${esc(f.name)}</div>${f.originalMarket?`<div class="tiny muted">Original: ${esc(f.originalMarket)}</div>`:""}</div><div>${f.status==="researching"?`<span class="pill CAUTION">Round ${esc(f.pendingRound||f.rounds.length+1)} running…</span>`:f.status==="error"?'<span class="pill UNRESOLVED">Error</span>':latest?`<span class="pill ${esc(classKey(a.classification))}">Round ${f.rounds.length}</span>`:'<span class="pill">Waiting</span>'}</div></div>
  ${progressHtml(f,latest)}
  ${f.error?`<div class="status bad">${esc(f.error)}</div>`:""}${latest?analysisHtml(latest):""}
- <div class="actions">${f.status==="error"?`<button class="secondary" onclick="retryFailedFixture('${session.id}',${i})">Retry Failed Fixture</button>`:""}${latest?`<button class="secondary" ${f.status==="researching"?"disabled":""} onclick="relearn('${session.id}',${i})">${f.status==="researching"?`Round ${esc(f.pendingRound||f.rounds.length+1)} running…`:`Relearn — Fresh Round ${f.rounds.length+1}`}</button><button class="secondary" ${f.status==="researching"?"disabled":""} onclick="expandCouncil('${session.id}',${i},10)">+10 Brains</button><button class="secondary" ${f.status==="researching"?"disabled":""} onclick="expandCouncil('${session.id}',${i},25)">+25 Brains</button><button class="secondary" ${f.status==="researching"?"disabled":""} onclick="expandCouncil('${session.id}',${i},100)">Deepen toward 100</button>`:""}${f.rounds.length>1?`<button class="secondary" onclick="showRounds('${session.id}',${i})">Compare ${f.rounds.length} Rounds</button>`:""}</div></div>`}).join("")}</div>`
+ <div class="actions">${f.status==="error"?`<button class="secondary" onclick="retryFailedFixture('${session.id}',${i})">Retry Failed Fixture</button>`:""}${latest?`<button class="secondary" ${f.status==="researching"?"disabled":""} onclick="relearn('${session.id}',${i})">${f.status==="researching"?`Round ${esc(f.pendingRound||f.rounds.length+1)} running…`:`Relearn — Fresh Round ${f.rounds.length+1}`}</button><button class="secondary" ${f.status==="researching"?"disabled":""} onclick="expandCouncil('${session.id}',${i},2)">+2 Models</button><button class="secondary" ${f.status==="researching"?"disabled":""} onclick="expandCouncil('${session.id}',${i},4)">+4 Models</button><button class="secondary" ${f.status==="researching"?"disabled":""} onclick="expandCouncil('${session.id}',${i},8)">Deepen to 8 models</button>`:""}${f.rounds.length>1?`<button class="secondary" onclick="showRounds('${session.id}',${i})">Compare ${f.rounds.length} Rounds</button>`:""}</div>${latest?`<div class="status" style="margin-top:10px"><strong>Result tracker — Round ${f.rounds.length}:</strong> ${esc((f.outcomes||[]).find(x=>x.round===f.rounds.length)?.outcome||"NOT MARKED")}<div class="actions"><button class="secondary" onclick="markOutcome('${session.id}',${i},'GREEN')">✅ GREEN</button><button class="secondary" onclick="markOutcome('${session.id}',${i},'RED')">❌ RED</button><button class="secondary" onclick="markOutcome('${session.id}',${i},'PUSH/VOID')">↔ PUSH/VOID</button><button class="secondary" onclick="markOutcome('${session.id}',${i},'')">Clear</button></div><span class="tiny muted">Use this only after the match is settled. Football Facts stores the market/classification snapshot for this research round so later versions can be judged against real outcomes.</span></div>`:""}</div>`}).join("")}</div>`
 }
+window.markOutcome=(sessionId,index,outcome)=>{
+ const s=state.sessions.find(x=>x.id===sessionId),f=s?.fixtures?.[index],r=f?.rounds?.at(-1);if(!f||!r)return;
+ const round=f.rounds.length,a=r.analysis||{};f.outcomes=(f.outcomes||[]).filter(x=>x.round!==round);
+ if(outcome)f.outcomes.push({round,outcome,markedAt:new Date().toISOString(),market:a.finalMarket||"UNRESOLVED",classification:a.classification||"",council:r.aiCouncil?.aggregation?.consensusMarket||"NO CONSENSUS"});
+ saveState();renderSession(s);renderPostboard();
+};
+
 window.retryFailedFixture=async(sessionId,index)=>{
  const s=state.sessions.find(x=>x.id===sessionId),f=s?.fixtures?.[index];if(!f)return;
  const round=Math.max(1,(f.rounds?.length||0)+1);
  f.status="researching";f.pendingRound=round;delete f.error;saveState();renderSession(s);
- const status=document.getElementById("runStatus");status.classList.remove("hidden");status.className="status";status.textContent=`Retrying ${f.name}. The v6.2 client will tolerate temporary Render 502/503/504 responses automatically.`;
+ const status=document.getElementById("runStatus");status.classList.remove("hidden");status.className="status";status.textContent=`Retrying ${f.name}. The v7 client will retry temporary Render 502/503/504 responses automatically.`;
  try{const d=await researchFixture(f,round);f.rounds.push(d);f.status="done";status.className="status good";status.textContent=`Retry completed for ${f.name}.`;}
  catch(e){f.status="error";f.error=e.message;status.className="status bad";status.textContent=`Retry stopped: ${e.message}`;}
  delete f.pendingRound;delete f.progressId;saveState();renderSession(s);
@@ -755,7 +774,7 @@ window.retryFailedFixture=async(sessionId,index)=>{
 function showRounds(sessionId,index){const s=state.sessions.find(x=>x.id===sessionId),f=s?.fixtures[index];if(!f)return;alert(`${f.name}\n\n${f.rounds.map((r,i)=>`Round ${i+1}: ${r.analysis?.finalMarket||"?"} — ${r.analysis?.classification||"?"} — Gate ${r.authenticityGate?.status||"?"}`).join("\n")}`)}
 function download(name,obj){const blob=new Blob([JSON.stringify(obj,null,2)],{type:"application/json"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;a.click();URL.revokeObjectURL(a.href)}
 window.exportSession=id=>{const s=state.sessions.find(x=>x.id===id);if(s)download(`football-research-session-${id.slice(0,8)}.json`,s)}
-exportAllBtn.onclick=()=>download("football-factfirst-v2-backup.json",state);
+exportAllBtn.onclick=()=>download("football-factfirst-v7-backup.json",state);
 importInput.onchange=async e=>{try{const data=JSON.parse(await e.target.files[0].text());if(!Array.isArray(data.sessions))throw new Error("Invalid backup");state=data;saveState();renderHistory();alert("Backup imported.")}catch(err){alert(err.message)}e.target.value=""};
 
 function postboardRows(){
@@ -763,7 +782,8 @@ function postboardRows(){
  for(const s of state.sessions||[])for(const f of s.fixtures||[]){
    const r=f.rounds?.at(-1);if(!r)continue;
    const a=r.analysis||{},agg=r.aiCouncil?.aggregation||{},v=r.valueAudit||{};
-   rows.push({date:s.createdAt,fixture:f.name,market:a.finalMarket||"UNRESOLVED",classification:a.classification||"",evidence:Math.round(clamp100(a.dataAnalysis?.evidenceQualityScore)),council:agg.convergence||"NONE",councilMarket:agg.consensusMarket||"NO CONSENSUS",value:(v.potentialValues||[])[0]||null,convergence:r.finalConvergence?.status||""});
+   const outcome=(f.outcomes||[]).find(x=>x.round===f.rounds.length)?.outcome||"";
+   rows.push({date:s.createdAt,fixture:f.name,market:a.finalMarket||"UNRESOLVED",classification:a.classification||"",evidence:Math.round(clamp100(a.dataAnalysis?.evidenceQualityScore)),council:agg.convergence||"NONE",councilMarket:agg.consensusMarket||"NO CONSENSUS",value:(v.potentialValues||[])[0]||null,convergence:r.finalConvergence?.status||"",outcome});
  }
  return rows;
 }
@@ -774,9 +794,10 @@ function renderPostboard(){
  const value=rows.filter(x=>x.value).length;
  const unresolved=rows.filter(x=>String(x.market).includes("UNRESOLVED")||String(x.classification).includes("UNRESOLVED")).length;
  const avg=completed?Math.round(rows.reduce((s,x)=>s+(x.evidence||0),0)/completed):0;
- postboardStats.innerHTML=[["Completed fixtures",completed],["Strong",strong],["Primary + Council converged",converged],["Potential value alerts",value],["Unresolved",unresolved],["Average evidence quality",avg+"/100"]].map(([k,v])=>`<div class="score-card"><span class="tiny muted">${esc(k)}</span><div class="score-big">${esc(v)}</div></div>`).join("");
+ const tracked=rows.filter(x=>x.outcome==="GREEN"||x.outcome==="RED");const green=tracked.filter(x=>x.outcome==="GREEN").length;const greenRate=tracked.length?Math.round(green/tracked.length*100)+"%":"—";
+ postboardStats.innerHTML=[["Completed fixtures",completed],["Strong",strong],["Primary + Council converged",converged],["Tracked settled picks",tracked.length],["Tracked green rate",greenRate],["Unresolved",unresolved],["Average evidence quality",avg+"/100"]].map(([k,v])=>`<div class="score-card"><span class="tiny muted">${esc(k)}</span><div class="score-big">${esc(v)}</div></div>`).join("");
  if(!rows.length){postboardList.innerHTML='<p class="muted">No completed research is on the board yet.</p>';return}
- postboardList.innerHTML=`<div class="post-row post-head"><div>Fixture / evidence</div><div>Primary market</div><div>AI Council</div><div>Value</div></div>`+rows.map(x=>`<div class="post-row"><div><strong>${esc(x.fixture)}</strong><br><span class="tiny muted">${esc(fmtDate(x.date))} • Evidence ${esc(x.evidence)}/100</span></div><div><strong>${esc(x.market)}</strong><br><span class="tiny muted">${esc(x.classification)}</span></div><div><strong>${esc(x.council)}</strong><br><span class="tiny muted">${esc(x.councilMarket)}</span></div><div>${x.value?`<strong style="color:var(--good)">POTENTIAL VALUE</strong><br><span class="tiny">${esc(x.value.market)} • +${esc(x.value.edgePercentagePoints)}pp</span>`:'<span class="muted">No clear value</span>'}</div></div>`).join("");
+ postboardList.innerHTML=`<div class="post-row post-head"><div>Fixture / evidence</div><div>Primary market</div><div>AI Council</div><div>Value</div></div>`+rows.map(x=>`<div class="post-row"><div><strong>${esc(x.fixture)}</strong><br><span class="tiny muted">${esc(fmtDate(x.date))} • Evidence ${esc(x.evidence)}/100</span></div><div><strong>${esc(x.market)}</strong><br><span class="tiny muted">${esc(x.classification)}${x.outcome?` • Result ${esc(x.outcome)}`:""}</span></div><div><strong>${esc(x.council)}</strong><br><span class="tiny muted">${esc(x.councilMarket)}</span></div><div>${x.value?`<strong style="color:var(--good)">POTENTIAL VALUE</strong><br><span class="tiny">${esc(x.value.market)} • +${esc(x.value.edgePercentagePoints)}pp</span>`:'<span class="muted">No clear value</span>'}</div></div>`).join("");
 }
 document.getElementById("refreshPostboard").onclick=renderPostboard;
 
@@ -784,9 +805,9 @@ document.getElementById("refreshPostboard").onclick=renderPostboard;
 async function expandCouncil(sessionId,index,addCount){
  const s=state.sessions.find(x=>x.id===sessionId),f=s?.fixtures?.[index],round=f?.rounds?.at(-1);
  if(!round)return;
- const current=round.aiCouncil?.members?.length||0,target=addCount>=100?100:Math.min(100,current+addCount);
- if(target<=current){alert("This match has already reached the 100-agent ceiling or the requested depth.");return}
- if(target>=20&&!confirm(`Deepen this match from ${current} toward ${target} agent seats?\n\nThe council is adaptive: it expands in waves and may stop early if independent underlying models converge. Provider circuit breakers skip quota-exhausted services. Continue?`))return;
+ const current=round.aiCouncil?.members?.filter(x=>x.brainType!=="deterministic-engine").length||0,target=addCount>=8?8:Math.min(8,current+addCount);
+ if(target<=current){alert("This match has already reached the 8 independent-model ceiling or the requested depth.");return}
+ if(target>=6&&!confirm(`Deepen this match from ${current} toward ${target} independent AI models?\n\nThe Council stops early when strong independent-model agreement is reached and skips providers in cooldown. Continue?`))return;
  f.status="researching";saveState();renderSession(s);
  try{
    const r=await fetch("/api/council-expand",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
@@ -812,6 +833,6 @@ document.getElementById("refreshProviders").onclick=refreshProviderBoard;
 function renderHistory(){if(!state.sessions.length){historyList.innerHTML='<p class="muted">No saved sessions yet.</p>';return}historyList.innerHTML=state.sessions.map(s=>`<div class="session-row"><div><strong>${s.fixtures.length} fixtures</strong><br><span class="tiny muted">${fmtDate(s.createdAt)}</span></div><div class="right"><button class="secondary" onclick="openSession('${s.id}')">Open</button> <button class="danger" onclick="deleteSession('${s.id}')">Delete</button></div></div>`).join("")}
 window.openSession=id=>{const s=state.sessions.find(x=>x.id===id);if(!s)return;document.querySelector('[data-tab="session"]').click();renderSession(s)}
 window.deleteSession=id=>{if(!confirm("Delete this saved research session?"))return;state.sessions=state.sessions.filter(x=>x.id!==id);saveState();renderHistory()}
-if("serviceWorker" in navigator){navigator.serviceWorker.register("/service-worker.js").catch(()=>{})}
+if("serviceWorker" in navigator){navigator.serviceWorker.register(`/service-worker.js?v=${encodeURIComponent(APP_VERSION)}`).then(reg=>reg.update()).catch(err=>{console.error("Service worker registration failed",err);const b=document.getElementById("healthBadge");if(b){b.textContent="PWA update error — reopen online";b.style.color="var(--danger)"}})}
 </script>
 </body></html>
